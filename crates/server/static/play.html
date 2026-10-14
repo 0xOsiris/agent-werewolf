@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Play Agent Werewolf</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/css/game.css">
+</head>
+<body class="player">
+<div class="player-app">
+  <header class="player-head">
+    <div class="brand" id="brand">Agent Werewolf</div>
+    <div class="conn" id="conn"></div>
+  </header>
+
+  <section class="card join-card" id="join-card">
+    <h2>Join the village</h2>
+    <form id="join-form">
+      <label for="name">Your name</label>
+      <input id="name" type="text" maxlength="32" autocomplete="nickname" autocapitalize="words" required>
+      <button type="submit" id="join-btn">Join game</button>
+      <div class="error" id="join-error" role="alert"></div>
+      <div class="hint" id="join-hint"></div>
+    </form>
+  </section>
+
+  <section class="card role-card" id="role-card" hidden>
+    <div id="role-icon"></div>
+    <div>
+      <div class="role-name" id="role-name"></div>
+      <p id="role-goal"></p>
+      <div class="pack" id="role-pack"></div>
+    </div>
+  </section>
+
+  <section class="card status-card" id="status-card" hidden>
+    <div id="status-text"></div>
+    <button type="button" id="status-again" hidden>Play again</button>
+  </section>
+
+  <div class="play-grid">
+    <section class="scene" id="scene" aria-label="Village scene"></section>
+    <div class="panels">
+      <section class="action" id="action" hidden aria-live="polite">
+        <h3 id="act-title"></h3>
+        <div class="action-meta"><span id="act-help"></span><span id="act-time"></span></div>
+        <div class="countdown" id="act-countdown"><div></div></div>
+        <div id="act-speak" hidden>
+          <textarea id="act-text" maxlength="600" rows="3" placeholder="Say something to the village…"></textarea>
+          <div class="counter" id="act-counter">0 / 600</div>
+          <div class="action-row">
+            <button type="button" id="act-send">Send</button>
+            <button type="button" class="secondary" id="act-silent">Stay silent</button>
+          </div>
+        </div>
+        <div id="act-target" hidden>
+          <div class="candidates" id="act-cands"></div>
+          <div class="action-row">
+            <button type="button" id="act-confirm" disabled>Confirm</button>
+            <button type="button" class="secondary" id="act-abstain">Abstain</button>
+          </div>
+        </div>
+        <div class="error" id="act-error" role="alert"></div>
+      </section>
+      <div class="card" id="notice-card" hidden><div class="sent" id="notice"></div></div>
+      <section class="card" id="private-card" hidden>
+        <h3 class="panel-title">Your secrets</h3>
+        <div class="feed private-feed" id="private-feed"></div>
+      </section>
+      <section class="card">
+        <h3 class="panel-title">Village chat</h3>
+        <div class="feed play-feed" id="feed"></div>
+      </section>
+    </div>
+  </div>
+  <div class="spacer-for-action"></div>
+</div>
+
+<div class="gameover" id="gameover" hidden>
+  <div class="card">
+    <div class="result" id="go-result"></div>
+    <div id="go-winner"></div>
+    <ul class="roles-list" id="go-roles"></ul>
+    <button type="button" id="again">Play again</button>
+    <div class="hint" id="again-hint"></div>
+    <button type="button" class="secondary" id="go-close">Keep watching</button>
+  </div>
+</div>
+<script type="module" src="/static/js/play.js"></script>
+</body>
+</html>

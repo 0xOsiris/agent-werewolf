@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Werewolf</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/css/game.css">
+</head>
+<body class="spectator">
+<header class="topbar">
+  <div class="brand" id="brand">Agent Werewolf</div>
+  <div class="phase" id="phase">Lobby</div>
+  <div class="subtitle" id="subtitle"></div>
+  <div class="controls" id="controls">
+    <button id="start" type="button">Start</button>
+    <button id="reset" type="button" class="secondary">Reset</button>
+    <span id="status">connecting…</span>
+  </div>
+</header>
+<main class="spec-main">
+  <section class="scene" id="scene" aria-label="Village scene"></section>
+  <aside class="side">
+    <div class="lobby-card" id="lobby">
+      <h2>Scan to play against the AIs</h2>
+      <div class="qr-frame"><img id="qr" src="/qr.svg" alt="QR code linking to the player page"></div>
+      <div class="play-url" id="play-url"></div>
+      <div class="lobby-hint" id="lobby-hint">Agents join with POST /v1/join</div>
+    </div>
+    <div class="feed" id="feed" hidden></div>
+  </aside>
+</main>
+<script type="module" src="/static/js/spectator.js"></script>
+</body>
+</html>
