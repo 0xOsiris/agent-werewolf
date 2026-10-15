@@ -27,6 +27,12 @@ pub struct Config {
     /// Play without a sheriff.
     #[arg(long, overrides_with = "sheriff")]
     pub no_sheriff: bool,
+    /// Deal one villager the cupid role (the default).
+    #[arg(long, overrides_with = "no_cupid")]
+    pub cupid: bool,
+    /// Play without a cupid.
+    #[arg(long, overrides_with = "cupid")]
+    pub no_cupid: bool,
     /// Start automatically once this many players have joined.
     #[arg(long)]
     pub auto_start: Option<usize>,
@@ -85,6 +91,11 @@ impl Config {
         !self.no_sheriff
     }
 
+    /// On unless `--no-cupid` was given last.
+    pub fn cupid(&self) -> bool {
+        !self.no_cupid
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         ensure!(
             self.min_players >= MIN_PLAYERS,
@@ -95,7 +106,7 @@ impl Config {
             "--max-players must be >= --min-players"
         );
         if let Some(wolves) = self.wolves {
-            let need = players_needed(wolves.get(), self.sheriff());
+            let need = players_needed(wolves.get(), self.sheriff(), self.cupid());
             ensure!(
                 need <= self.max_players,
                 "--wolves {wolves} needs at least {need} players, but --max-players is {}",

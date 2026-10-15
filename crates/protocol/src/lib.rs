@@ -20,6 +20,8 @@ pub enum Role {
     Villager,
     /// Village gunslinger with one bullet; shooting a non-wolf kills the sheriff too.
     Sheriff,
+    /// Village matchmaker who links two Lovers on night 1.
+    Cupid,
 }
 
 impl Role {
@@ -36,6 +38,8 @@ impl Role {
 pub enum Team {
     Village,
     Wolves,
+    /// A werewolf and a non-werewolf in love, once they are the last two alive. Only a winner.
+    Lovers,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -109,6 +113,8 @@ pub enum TurnKind {
     DoctorProtect,
     /// Fire the sheriff's one bullet before the vote. Answer with `target`; null holds fire.
     SheriffShoot,
+    /// Cupid's first or second Lover, on night 1. Answer with `target`; null means no Lovers.
+    CupidLink,
 }
 
 /// Everything this player is allowed to know.
@@ -176,6 +182,8 @@ pub enum DeathCause {
     Shot,
     /// The sheriff, after shooting a non-wolf.
     Backfire,
+    /// A Lover, right after their partner died.
+    Heartbreak,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -195,6 +203,16 @@ pub enum PrivateEvent {
     },
     Protected {
         target: PlayerId,
+    },
+    /// Cupid's two Lovers, in pick order.
+    Linked {
+        a: PlayerId,
+        b: PlayerId,
+    },
+    /// Sent to each Lover about the other.
+    InLove {
+        partner: PlayerId,
+        partner_role: Role,
     },
 }
 
@@ -243,6 +261,14 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&Poll::Wait).unwrap(),
             r#"{"status":"wait"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&PrivateEvent::InLove {
+                partner: 2,
+                partner_role: Role::Cupid,
+            })
+            .unwrap(),
+            r#"{"type":"in_love","partner":2,"partner_role":"cupid"}"#
         );
     }
 }

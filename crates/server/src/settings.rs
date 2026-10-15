@@ -25,6 +25,7 @@ pub struct Settings {
 pub struct SettingsBody {
     pub wolves: Option<u32>,
     pub sheriff: bool,
+    pub cupid: bool,
     pub discussion_secs: u32,
     pub ai_chat_cooldown_secs: u32,
     pub ai_max_chat_messages: u32,
@@ -43,6 +44,7 @@ impl Settings {
             setup: Setup {
                 wolves: config.wolves,
                 sheriff: config.sheriff(),
+                cupid: config.cupid(),
             },
             discussion: config.discussion_secs,
             ai_chat_cooldown: config.ai_chat_cooldown_secs,
@@ -59,6 +61,7 @@ impl Settings {
                 .wolves
                 .map(|w| u32::try_from(w.get()).unwrap_or(u32::MAX)),
             sheriff: self.setup.sheriff,
+            cupid: self.setup.cupid,
             discussion_secs: secs(self.discussion),
             ai_chat_cooldown_secs: secs(self.ai_chat_cooldown),
             ai_max_chat_messages: self.ai_max_chat_messages,
@@ -104,9 +107,9 @@ impl SettingsBody {
         )?;
         let wolves = self.wolves.and_then(|w| NonZeroUsize::new(w as usize));
         if let Some(wolves) = wolves {
-            let need = players_needed(wolves.get(), self.sheriff);
+            let need = players_needed(wolves.get(), self.sheriff, self.cupid);
             if need > max_players {
-                let setup = describe_setup(wolves.get(), self.sheriff);
+                let setup = describe_setup(wolves.get(), self.sheriff, self.cupid);
                 return Err(format!(
                     "{setup} need {need} players, but --max-players is {max_players}"
                 ));
@@ -116,6 +119,7 @@ impl SettingsBody {
             setup: Setup {
                 wolves,
                 sheriff: self.sheriff,
+                cupid: self.cupid,
             },
             discussion: Duration::from_secs(discussion.into()),
             ai_chat_cooldown: Duration::from_secs(cooldown.into()),
@@ -132,6 +136,7 @@ mod tests {
     const VALID: SettingsBody = SettingsBody {
         wolves: Some(2),
         sheriff: true,
+        cupid: true,
         discussion_secs: 90,
         ai_chat_cooldown_secs: 20,
         ai_max_chat_messages: 4,
@@ -210,15 +215,29 @@ mod tests {
             .validate(12)
             .is_ok()
         );
-        let err = SettingsBody {
-            wolves: Some(3),
-            ..VALID
-        }
-        .validate(6)
-        .unwrap_err();
+        let err = |wolves, sheriff, cupid, max_players| {
+            SettingsBody {
+                wolves: Some(wolves),
+                sheriff,
+                cupid,
+                ..VALID
+            }
+            .validate(max_players)
+            .err()
+        };
         assert_eq!(
-            err,
-            "3 wolves + sheriff need 7 players, but --max-players is 6"
+            err(3, true, false, 6).as_deref(),
+            Some("3 wolves + sheriff need 7 players, but --max-players is 6")
         );
+        assert_eq!(
+            err(3, true, true, 7).as_deref(),
+            Some("3 wolves + sheriff + cupid need 8 players, but --max-players is 7")
+        );
+        assert_eq!(
+            err(1, true, true, 5).as_deref(),
+            Some("1 wolves + sheriff + cupid need 6 players, but --max-players is 5")
+        );
+        assert_eq!(err(1, false, true, 5), None);
+        assert_eq!(err(3, true, true, 8), None);
     }
 }

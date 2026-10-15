@@ -23,7 +23,7 @@ pub const LAST_DAY: u32 = 10;
 pub enum EngineError {
     #[error("need at least {MIN_PLAYERS} players, got {0}")]
     TooFewPlayers(usize),
-    /// `setup` reads like "2 wolves + sheriff".
+    /// `setup` reads like "2 wolves + sheriff + cupid".
     #[error("need at least {need} players for {setup}")]
     TooFewForSetup { setup: String, need: usize },
 }
@@ -35,19 +35,23 @@ pub struct Setup {
     pub wolves: Option<NonZeroUsize>,
     /// Deal one villager the sheriff role.
     pub sheriff: bool,
+    /// Deal one villager the cupid role.
+    pub cupid: bool,
 }
 
-/// Seats needed: fewer wolves than others, plus a seer, doctor, the sheriff if on, and a villager.
-pub fn players_needed(wolves: usize, sheriff: bool) -> usize {
+/// Seats needed: fewer wolves than others, plus a seer, doctor, sheriff and cupid if on, and a
+/// villager.
+pub fn players_needed(wolves: usize, sheriff: bool, cupid: bool) -> usize {
     (2 * wolves + 1)
-        .max(wolves + 2 + usize::from(sheriff) + 1)
+        .max(wolves + 2 + usize::from(sheriff) + usize::from(cupid) + 1)
         .max(MIN_PLAYERS)
 }
 
-/// Names a setup in errors, like "2 wolves + sheriff".
-pub fn describe_setup(wolves: usize, sheriff: bool) -> String {
+/// Names a setup in errors, like "2 wolves + sheriff + cupid".
+pub fn describe_setup(wolves: usize, sheriff: bool, cupid: bool) -> String {
     let sheriff = if sheriff { " + sheriff" } else { "" };
-    format!("{wolves} wolves{sheriff}")
+    let cupid = if cupid { " + cupid" } else { "" };
+    format!("{wolves} wolves{sheriff}{cupid}")
 }
 
 /// The sheriff's one shot.
@@ -58,22 +62,27 @@ pub struct ShotRecord {
     pub hit_wolf: bool,
 }
 
-/// Which role may see a private event.
+/// Who may see a private event: a role, or one lover.
 #[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum Audience {
     Wolves,
     Seer,
     Doctor,
+    Cupid,
+    /// Serializes as `{"lover": <seat>}`.
+    Lover(PlayerId),
 }
 
 impl Audience {
-    pub(crate) fn of(role: Role) -> Option<Self> {
-        match role {
-            Role::Werewolf => Some(Self::Wolves),
-            Role::Seer => Some(Self::Seer),
-            Role::Doctor => Some(Self::Doctor),
-            Role::Villager | Role::Sheriff => None,
+    /// Whether `player`, dealt `role`, may see events for this audience.
+    pub(crate) fn admits(self, player: PlayerId, role: Role) -> bool {
+        match self {
+            Self::Wolves => role == Role::Werewolf,
+            Self::Seer => role == Role::Seer,
+            Self::Doctor => role == Role::Doctor,
+            Self::Cupid => role == Role::Cupid,
+            Self::Lover(lover) => lover == player,
         }
     }
 }
@@ -101,6 +110,8 @@ pub struct Answer {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Step {
+    /// Cupid picks a Lover on night 1; `first` holds the first pick while the second is due.
+    CupidLink { first: Option<PlayerId> },
     /// Open chat among living wolves.
     WolfChat,
     NightActions,
@@ -125,6 +136,7 @@ pub struct Game {
     /// The sheriff still holds their bullet.
     bullet: bool,
     shot: Option<ShotRecord>,
+    lovers: Option<(PlayerId, PlayerId)>,
     winner: Option<Team>,
     public_log: Vec<PublicEvent>,
     private_log: Vec<(Audience, PrivateEvent)>,
@@ -144,10 +156,10 @@ impl Game {
             None if n < MIN_PLAYERS => return Err(EngineError::TooFewPlayers(n)),
             None => (n / 4).max(1),
         };
-        let need = players_needed(wolves, setup.sheriff);
+        let need = players_needed(wolves, setup.sheriff, setup.cupid);
         if n < need {
             return Err(EngineError::TooFewForSetup {
-                setup: describe_setup(wolves, setup.sheriff),
+                setup: describe_setup(wolves, setup.sheriff, setup.cupid),
                 need,
             });
         }
@@ -156,6 +168,9 @@ impl Game {
         roles.extend([Role::Seer, Role::Doctor]);
         if setup.sheriff {
             roles.push(Role::Sheriff);
+        }
+        if setup.cupid {
+            roles.push(Role::Cupid);
         }
         roles.resize(n, Role::Villager);
         roles.shuffle(&mut rng);
@@ -181,6 +196,7 @@ impl Game {
             last_protected: None,
             bullet: setup.sheriff,
             shot: None,
+            lovers: None,
             winner: None,
             public_log: Vec::new(),
             private_log: Vec::new(),
@@ -215,12 +231,39 @@ impl Game {
         self.shot
     }
 
+    /// `player`'s partner, if Cupid linked them.
+    pub fn lover_of(&self, player: PlayerId) -> Option<PlayerId> {
+        match self.lovers? {
+            (a, b) if a == player => Some(b),
+            (a, b) if b == player => Some(a),
+            _ => None,
+        }
+    }
+
+    /// Whether `player` shares the win; cross-team lovers win only as [`Team::Lovers`].
+    pub fn won(&self, player: PlayerId) -> bool {
+        match self.winner {
+            Some(Team::Lovers) => self.lover_of(player).is_some(),
+            Some(team) => {
+                let rogue = self
+                    .rogue_lovers()
+                    .is_some_and(|(a, b)| player == a || player == b);
+                self.role(player).team() == team && !rogue
+            }
+            None => false,
+        }
+    }
+
     /// The open chat window's turn kind, if the game is waiting on chat.
     pub fn chat(&self) -> Option<TurnKind> {
         match self.step {
             Step::WolfChat => Some(TurnKind::WolfChat),
             Step::Discussion => Some(TurnKind::DaySpeak),
-            Step::NightActions | Step::SheriffShoot | Step::DayVote | Step::Over => None,
+            Step::CupidLink { .. }
+            | Step::NightActions
+            | Step::SheriffShoot
+            | Step::DayVote
+            | Step::Over => None,
         }
     }
 
@@ -246,7 +289,11 @@ impl Game {
             Step::WolfChat => self.step = Step::NightActions,
             Step::Discussion if self.armed_sheriff().is_some() => self.step = Step::SheriffShoot,
             Step::Discussion => self.step = Step::DayVote,
-            Step::NightActions | Step::SheriffShoot | Step::DayVote | Step::Over => {}
+            Step::CupidLink { .. }
+            | Step::NightActions
+            | Step::SheriffShoot
+            | Step::DayVote
+            | Step::Over => {}
         }
         self.take_events()
     }
@@ -268,6 +315,11 @@ impl Game {
             candidates,
         };
         match self.step {
+            Step::CupidLink { first } => living
+                .iter()
+                .filter(|&&p| self.role(p) == Role::Cupid)
+                .map(|&p| spec(p, TurnKind::CupidLink, except(first)))
+                .collect(),
             Step::WolfChat => living
                 .iter()
                 .filter(|&&p| self.is_wolf(p))
@@ -294,7 +346,7 @@ impl Game {
                         TurnKind::DoctorProtect,
                         except(self.last_protected),
                     )),
-                    Role::Villager | Role::Sheriff => None,
+                    Role::Villager | Role::Sheriff | Role::Cupid => None,
                 })
                 .collect(),
             Step::SheriffShoot => self
@@ -326,6 +378,7 @@ impl Game {
                 events.extend(self.close_chat());
                 return events;
             }
+            Step::CupidLink { first } => self.resolve_link(&turns, answers, first),
             Step::NightActions => self.resolve_night(&turns, answers),
             Step::SheriffShoot => self.resolve_shot(&turns, answers),
             Step::DayVote => self.resolve_vote(&turns, answers),
@@ -337,7 +390,6 @@ impl Game {
     /// Everything `you` may know. `None` for an unknown seat.
     pub fn view(&self, you: PlayerId) -> Option<PlayerView> {
         let role = *self.roles.get(you as usize)?;
-        let audience = Audience::of(role);
         let wolf_team = match role {
             Role::Werewolf => self
                 .seats()
@@ -355,10 +407,38 @@ impl Game {
             private_log: self
                 .private_log
                 .iter()
-                .filter(|(seen_by, _)| Some(*seen_by) == audience)
+                .filter(|(seen_by, _)| seen_by.admits(you, role))
                 .map(|(_, event)| event.clone())
                 .collect(),
         })
+    }
+
+    /// Records Cupid's pick; the second links the Lovers. Null or a timeout on either means none.
+    fn resolve_link(&mut self, turns: &[TurnSpec], answers: &[Answer], first: Option<PlayerId>) {
+        let pick = turns.iter().find_map(|turn| chosen(turn, answers));
+        match (first, pick) {
+            (None, Some(a)) => self.step = Step::CupidLink { first: Some(a) },
+            (Some(a), Some(b)) => {
+                self.link(a, b);
+                self.step = self.night_step();
+            }
+            (_, None) => self.step = self.night_step(),
+        }
+    }
+
+    fn link(&mut self, a: PlayerId, b: PlayerId) {
+        self.lovers = Some((a, b));
+        self.emit_private(Audience::Cupid, PrivateEvent::Linked { a, b });
+        for (lover, partner) in [(a, b), (b, a)] {
+            let partner_role = self.role(partner);
+            self.emit_private(
+                Audience::Lover(lover),
+                PrivateEvent::InLove {
+                    partner,
+                    partner_role,
+                },
+            );
+        }
     }
 
     fn resolve_night(&mut self, turns: &[TurnSpec], answers: &[Answer]) {
@@ -400,7 +480,8 @@ impl Game {
                 TurnKind::DaySpeak
                 | TurnKind::DayVote
                 | TurnKind::WolfChat
-                | TurnKind::SheriffShoot => {}
+                | TurnKind::SheriffShoot
+                | TurnKind::CupidLink => {}
             }
         }
         let victim = leaders(&wolf_votes).choose(&mut self.rng).copied();
@@ -436,7 +517,8 @@ impl Game {
             });
             let when = self.phase;
             self.bury(target, DeathCause::Shot, when);
-            if !hit_wolf {
+            // A sheriff who shot their own lover has already died of heartbreak.
+            if !hit_wolf && self.is_alive(sheriff) {
                 self.bury(sheriff, DeathCause::Backfire, when);
             }
             self.settle();
@@ -479,12 +561,21 @@ impl Game {
     fn start_night(&mut self, n: u32) {
         self.day = n;
         self.set_phase(Phase::Night { n });
+        self.step = if n == 1 && self.roles.contains(&Role::Cupid) {
+            Step::CupidLink { first: None }
+        } else {
+            self.night_step()
+        };
+    }
+
+    /// Wolf chat if two or more wolves live, else straight to the night actions.
+    fn night_step(&self) -> Step {
         let wolves = self.living().filter(|&p| self.is_wolf(p)).count();
-        self.step = if wolves >= 2 {
+        if wolves >= 2 {
             Step::WolfChat
         } else {
             Step::NightActions
-        };
+        }
     }
 
     fn kill(&mut self, player: PlayerId, cause: DeathCause, when: Phase) {
@@ -492,7 +583,7 @@ impl Game {
         self.settle();
     }
 
-    /// Records a death without checking for a win, for deaths that come in pairs.
+    /// Records a death, and the partner's heartbreak, without checking for a win.
     fn bury(&mut self, player: PlayerId, cause: DeathCause, when: Phase) {
         let role = self.role(player);
         if let Some(seat) = self.players.get_mut(player as usize) {
@@ -507,6 +598,10 @@ impl Game {
             role,
             cause,
         });
+        // The partner is already dead when this runs for the heartbreak itself.
+        if let Some(partner) = self.lover_of(player).filter(|&p| self.is_alive(p)) {
+            self.bury(partner, DeathCause::Heartbreak, when);
+        }
     }
 
     fn settle(&mut self) {
@@ -516,6 +611,13 @@ impl Game {
     }
 
     fn check_win(&self) -> Option<Team> {
+        if let Some((a, b)) = self.rogue_lovers()
+            && self.is_alive(a)
+            && self.is_alive(b)
+            && self.living().all(|p| p == a || p == b)
+        {
+            return Some(Team::Lovers);
+        }
         let (wolves, village) = self.living().fold((0, 0), |(w, v), p| {
             if self.is_wolf(p) {
                 (w + 1, v)
@@ -550,6 +652,16 @@ impl Game {
 
     fn living(&self) -> impl Iterator<Item = PlayerId> + '_ {
         self.players.iter().filter(|p| p.alive).map(|p| p.id)
+    }
+
+    /// Lovers from opposite teams, who can only win together.
+    fn rogue_lovers(&self) -> Option<(PlayerId, PlayerId)> {
+        self.lovers
+            .filter(|&(a, b)| self.role(a).team() != self.role(b).team())
+    }
+
+    fn is_alive(&self, player: PlayerId) -> bool {
+        self.players.get(player as usize).is_some_and(|p| p.alive)
     }
 
     fn role(&self, player: PlayerId) -> Role {
@@ -717,14 +829,14 @@ mod tests {
     #[test]
     fn fixed_wolf_count() {
         for n in [5, 11] {
-            let (game, _) = Game::new(roster(n), setup(Some(2), false), 3).unwrap();
+            let (game, _) = Game::new(roster(n), setup(Some(2), false, false), 3).unwrap();
             let count = |role| game.roles().iter().filter(|&&r| r == role).count();
             assert_eq!(count(Role::Werewolf), 2, "n={n}");
             assert_eq!((count(Role::Seer), count(Role::Doctor)), (1, 1), "n={n}");
             assert_eq!(count(Role::Villager), n - 4, "n={n}");
         }
         let err = |n, wolves, sheriff| {
-            Game::new(roster(n), setup(wolves, sheriff), 3)
+            Game::new(roster(n), setup(wolves, sheriff, false), 3)
                 .err()
                 .map(|e| e.to_string())
         };
@@ -739,15 +851,16 @@ mod tests {
         );
     }
 
-    fn setup(wolves: Option<usize>, sheriff: bool) -> Setup {
+    fn setup(wolves: Option<usize>, sheriff: bool, cupid: bool) -> Setup {
         Setup {
             wolves: wolves.and_then(NonZeroUsize::new),
             sheriff,
+            cupid,
         }
     }
 
     fn sheriff_game(n: usize, seed: u64) -> Game {
-        Game::new(roster(n), setup(None, true), seed).unwrap().0
+        Game::new(roster(n), setup(None, true, false), seed).unwrap().0
     }
 
     /// Plays silently until the sheriff's turn, returning the sheriff's seat.
@@ -774,13 +887,13 @@ mod tests {
             assert_eq!(count(Role::Villager), n - wolves - 3, "n={n}");
         }
         assert_eq!(
-            Game::new(roster(5), setup(Some(2), true), 0)
+            Game::new(roster(5), setup(Some(2), true, false), 0)
                 .err()
                 .map(|e| e.to_string())
                 .as_deref(),
             Some("need at least 6 players for 2 wolves + sheriff")
         );
-        assert!(Game::new(roster(6), setup(Some(2), true), 0).is_ok());
+        assert!(Game::new(roster(6), setup(Some(2), true, false), 0).is_ok());
     }
 
     #[test]
@@ -1204,9 +1317,384 @@ mod tests {
                         matches!(&view.private_log[..], [PrivateEvent::Protected { target }] if *target == doctor)
                     );
                 }
-                Role::Villager | Role::Sheriff => assert!(view.private_log.is_empty()),
+                Role::Villager | Role::Sheriff | Role::Cupid => {
+                    assert!(view.private_log.is_empty())
+                }
                 Role::Werewolf => {}
             }
         }
+    }
+
+    fn cupid_game(n: usize, sheriff: bool, seed: u64) -> Game {
+        Game::new(roster(n), setup(None, sheriff, true), seed)
+            .unwrap()
+            .0
+    }
+
+    fn seats_with(game: &Game, role: Role) -> Vec<PlayerId> {
+        (0..)
+            .zip(game.roles())
+            .filter(|&(_, &r)| r == role)
+            .map(|(p, _)| p)
+            .collect()
+    }
+
+    /// Answers Cupid's two turns, linking `a` and `b`.
+    fn link(game: &mut Game, a: PlayerId, b: PlayerId) -> Vec<GameEvent> {
+        assert!(step(game, |_, _| target(a)).is_empty(), "the first pick is secret");
+        let events = step(game, |_, _| target(b));
+        assert_eq!(game.lover_of(a), Some(b));
+        events
+    }
+
+    fn deaths(events: &[GameEvent]) -> Vec<(PlayerId, DeathCause)> {
+        public(events)
+            .into_iter()
+            .filter_map(|e| match e {
+                PublicEvent::Died { player, cause, .. } => Some((*player, *cause)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Wolves kill, and everyone votes for, the first candidate who isn't a lover.
+    fn spare_lovers(game: &Game, turn: &TurnSpec) -> Option<Action> {
+        let target = turn
+            .candidates
+            .iter()
+            .copied()
+            .find(|&c| game.lover_of(c).is_none());
+        match turn.kind {
+            TurnKind::WolfKill | TurnKind::DayVote => Some(Action::Target { target }),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn role_counts_with_cupid() {
+        for (n, wolves) in [(6, 1), (8, 2), (12, 3)] {
+            let game = cupid_game(n, false, 7);
+            let count = |role| game.roles().iter().filter(|&&r| r == role).count();
+            assert_eq!(count(Role::Werewolf), wolves, "n={n}");
+            assert_eq!(count(Role::Cupid), 1, "n={n}");
+            assert_eq!(count(Role::Villager), n - wolves - 3, "n={n}");
+        }
+        // Off by default: no cupid and no link turn.
+        let game = game(8, 7);
+        assert!(!game.roles().contains(&Role::Cupid));
+        assert_eq!(game.chat(), Some(TurnKind::WolfChat));
+    }
+
+    #[test]
+    fn players_needed_covers_every_setup() {
+        for (wolves, sheriff, cupid, need) in [
+            (1, false, false, 5),
+            (1, true, false, 5),
+            (1, false, true, 5),
+            (1, true, true, 6),
+            (2, false, false, 5),
+            (2, true, false, 6),
+            (2, false, true, 6),
+            (2, true, true, 7),
+            (3, false, false, 7),
+            (3, true, false, 7),
+            (3, false, true, 7),
+            (3, true, true, 8),
+        ] {
+            let case = format!("{wolves} wolves, sheriff={sheriff}, cupid={cupid}");
+            assert_eq!(players_needed(wolves, sheriff, cupid), need, "{case}");
+            let setup = setup(Some(wolves), sheriff, cupid);
+            assert!(Game::new(roster(need), setup, 0).is_ok(), "{case}");
+            assert_eq!(
+                Game::new(roster(need - 1), setup, 0).err(),
+                Some(EngineError::TooFewForSetup {
+                    setup: describe_setup(wolves, sheriff, cupid),
+                    need
+                }),
+                "{case}"
+            );
+        }
+        assert_eq!(
+            Game::new(roster(6), setup(Some(2), true, true), 0)
+                .err()
+                .map(|e| e.to_string())
+                .as_deref(),
+            Some("need at least 7 players for 2 wolves + sheriff + cupid")
+        );
+        // Without a fixed count, five seats get one wolf, which can't fit a sheriff and a cupid.
+        assert_eq!(
+            Game::new(roster(5), setup(None, true, true), 0)
+                .err()
+                .map(|e| e.to_string())
+                .as_deref(),
+            Some("need at least 6 players for 1 wolves + sheriff + cupid")
+        );
+    }
+
+    #[test]
+    fn cupid_links_two_lovers_before_wolf_chat() {
+        let mut game = cupid_game(8, false, 21);
+        let cupid = seat_with(&game, Role::Cupid);
+        let wolf = seat_with(&game, Role::Werewolf);
+        assert_eq!(game.phase, Phase::Night { n: 1 });
+        assert_eq!(
+            game.turns(),
+            [TurnSpec {
+                player: cupid,
+                kind: TurnKind::CupidLink,
+                candidates: (0..8).collect(),
+            }],
+            "the first pick may be Cupid"
+        );
+        assert!(step(&mut game, |_, _| target(cupid)).is_empty());
+        assert_eq!(
+            game.turns(),
+            [TurnSpec {
+                player: cupid,
+                kind: TurnKind::CupidLink,
+                candidates: (0..8).filter(|&p| p != cupid).collect(),
+            }],
+            "the second pick excludes the first"
+        );
+
+        let events = step(&mut game, |_, _| target(wolf));
+        assert!(
+            matches!(
+                &events[..],
+                [
+                    GameEvent::Private(Audience::Cupid, PrivateEvent::Linked { a, b }),
+                    GameEvent::Private(
+                        Audience::Lover(l1),
+                        PrivateEvent::InLove { partner: p1, partner_role: Role::Werewolf }
+                    ),
+                    GameEvent::Private(
+                        Audience::Lover(l2),
+                        PrivateEvent::InLove { partner: p2, partner_role: Role::Cupid }
+                    ),
+                ] if *a == cupid && *b == wolf && *l1 == cupid && *p1 == wolf && *l2 == wolf && *p2 == cupid
+            ),
+            "{events:?}"
+        );
+        assert_eq!(
+            (game.lover_of(cupid), game.lover_of(wolf)),
+            (Some(wolf), Some(cupid))
+        );
+        assert_eq!(game.chat(), Some(TurnKind::WolfChat), "night 1 goes on");
+
+        for you in 0..8 {
+            let log = game.view(you).unwrap().private_log;
+            let linked = log
+                .iter()
+                .filter(|e| matches!(e, PrivateEvent::Linked { .. }))
+                .count();
+            assert_eq!(linked, usize::from(you == cupid), "Linked for {you}");
+            let partners: Vec<PlayerId> = log
+                .iter()
+                .filter_map(|e| match e {
+                    PrivateEvent::InLove { partner, .. } => Some(*partner),
+                    _ => None,
+                })
+                .collect();
+            let expected = match you {
+                p if p == cupid => vec![wolf],
+                p if p == wolf => vec![cupid],
+                _ => Vec::new(),
+            };
+            assert_eq!(partners, expected, "InLove for {you}");
+        }
+
+        play_until(&mut game, |_, _| None, |g| g.phase == Phase::Night { n: 2 });
+        assert!(
+            game.turns().iter().all(|t| t.kind != TurnKind::CupidLink),
+            "Cupid acts on night 1 only"
+        );
+    }
+
+    #[test]
+    fn null_invalid_or_timeout_on_either_pick_means_no_lovers() {
+        let pass = Some(Action::Target { target: None });
+        let pick = target(0);
+        // `None` is a timeout; picking seat 0 twice is invalid the second time.
+        for (case, first, second) in [
+            ("null first", pass.clone(), None),
+            ("timeout first", None, None),
+            ("null second", pick.clone(), pass.clone()),
+            ("timeout second", pick.clone(), None),
+            ("repeat second", pick.clone(), pick.clone()),
+        ] {
+            let mut game = cupid_game(8, false, 31);
+            let mut events = step(&mut game, |_, _| first.clone());
+            if first.is_some_and(|a| a != Action::Target { target: None }) {
+                assert_eq!(game.turns()[0].kind, TurnKind::CupidLink, "{case}");
+                events.extend(step(&mut game, |_, _| second.clone()));
+            }
+            assert!(events.is_empty(), "{case}: {events:?}");
+            assert_eq!(game.chat(), Some(TurnKind::WolfChat), "{case}");
+            assert!((0..8).all(|p| game.lover_of(p).is_none()), "{case}");
+            assert!(
+                (0..8).all(|p| game.view(p).unwrap().private_log.is_empty()),
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_lover_dies_of_heartbreak_after_a_night_kill_or_a_vote() {
+        let mut game = cupid_game(8, false, 22);
+        let villagers = seats_with(&game, Role::Villager);
+        let (a, b) = (villagers[0], villagers[1]);
+        link(&mut game, a, b);
+        let events = play_until(
+            &mut game,
+            |_, t| match t.kind {
+                TurnKind::WolfKill => target(a),
+                _ => None,
+            },
+            |g| g.chat() == Some(TurnKind::DaySpeak),
+        );
+        assert_eq!(
+            deaths(&events),
+            [(a, DeathCause::Night), (b, DeathCause::Heartbreak)]
+        );
+        assert_eq!(game.died_on(b), Some(Phase::Night { n: 1 }));
+
+        let mut game = cupid_game(8, false, 23);
+        let villagers = seats_with(&game, Role::Villager);
+        let (a, b) = (villagers[0], villagers[1]);
+        link(&mut game, a, b);
+        play_until(&mut game, |_, _| None, |g| g.step == Step::DayVote);
+        let events = step(&mut game, |_, _| target(a));
+        assert_eq!(
+            deaths(&events),
+            [(a, DeathCause::Vote), (b, DeathCause::Heartbreak)]
+        );
+        assert_eq!(game.died_on(b), Some(Phase::Day { n: 1 }));
+    }
+
+    #[test]
+    fn heartbreak_follows_sheriff_shots_and_backfires() {
+        use DeathCause::{Backfire, Heartbreak, Shot};
+
+        // A wolf hit: its lover breaks; the sheriff lives.
+        let mut game = cupid_game(8, true, 24);
+        let wolf = seat_with(&game, Role::Werewolf);
+        let villager = seat_with(&game, Role::Villager);
+        link(&mut game, wolf, villager);
+        let sheriff = to_sheriff_turn(&mut game);
+        let events = shoot(&mut game, Some(wolf));
+        assert_eq!(deaths(&events), [(wolf, Shot), (villager, Heartbreak)]);
+        assert!(game.is_alive(sheriff));
+
+        // A lover missed: the partner breaks, then the sheriff backfires.
+        let mut game = cupid_game(8, true, 25);
+        let villagers = seats_with(&game, Role::Villager);
+        let (a, b) = (villagers[0], villagers[1]);
+        link(&mut game, a, b);
+        let sheriff = to_sheriff_turn(&mut game);
+        let events = shoot(&mut game, Some(a));
+        assert_eq!(
+            deaths(&events),
+            [(a, Shot), (b, Heartbreak), (sheriff, Backfire)]
+        );
+
+        // A sheriff in love misfires: the backfire breaks their partner.
+        let mut game = cupid_game(8, true, 26);
+        let sheriff = seat_with(&game, Role::Sheriff);
+        let seer = seat_with(&game, Role::Seer);
+        let villager = seat_with(&game, Role::Villager);
+        link(&mut game, sheriff, seer);
+        to_sheriff_turn(&mut game);
+        let events = shoot(&mut game, Some(villager));
+        assert_eq!(
+            deaths(&events),
+            [(villager, Shot), (sheriff, Backfire), (seer, Heartbreak)]
+        );
+
+        // A sheriff who shoots their own lover dies of heartbreak, not a second time by backfire.
+        let mut game = cupid_game(8, true, 27);
+        let sheriff = seat_with(&game, Role::Sheriff);
+        let seer = seat_with(&game, Role::Seer);
+        link(&mut game, sheriff, seer);
+        to_sheriff_turn(&mut game);
+        let events = shoot(&mut game, Some(seer));
+        assert_eq!(deaths(&events), [(seer, Shot), (sheriff, Heartbreak)]);
+        assert_eq!(game.step, Step::DayVote);
+    }
+
+    #[test]
+    fn cross_team_lovers_win_as_the_last_two_alive() {
+        let mut game = cupid_game(6, false, 28);
+        let wolf = seat_with(&game, Role::Werewolf);
+        let cupid = seat_with(&game, Role::Cupid);
+        link(&mut game, wolf, cupid);
+        let events = play(&mut game, spare_lovers);
+        // Parity alone would hand the last two to the wolves.
+        assert_eq!(game.winner(), Some(Team::Lovers));
+        assert!(matches!(
+            public(&events).last(),
+            Some(PublicEvent::GameOver {
+                winner: Team::Lovers
+            })
+        ));
+        let living: Vec<PlayerId> = game.living().collect();
+        assert_eq!(living.len(), 2);
+        assert!(living.contains(&wolf) && living.contains(&cupid));
+        for p in 0..6 {
+            assert_eq!(game.won(p), p == wolf || p == cupid, "seat {p}");
+        }
+    }
+
+    #[test]
+    fn cross_team_lovers_never_win_with_their_team() {
+        let mut game = cupid_game(8, false, 29);
+        let wolves = seats_with(&game, Role::Werewolf);
+        let villager = seat_with(&game, Role::Villager);
+        link(&mut game, wolves[0], villager);
+        // Wolves kill a non-lover each night and nobody is ever voted out.
+        play(&mut game, |g, t| match t.kind {
+            TurnKind::WolfKill => spare_lovers(g, t),
+            _ => None,
+        });
+        assert_eq!(game.winner(), Some(Team::Wolves));
+        assert!(game.is_alive(wolves[0]) && game.is_alive(villager));
+        assert_eq!(game.living().count(), 4, "the wolf lover counts toward parity");
+        for p in 0..8 {
+            assert_eq!(game.won(p), p == wolves[1], "seat {p}");
+        }
+    }
+
+    #[test]
+    fn same_team_lovers_play_for_their_team() {
+        // Two wolves in love: voting one out takes the pack.
+        let mut game = cupid_game(8, false, 30);
+        let wolves = seats_with(&game, Role::Werewolf);
+        link(&mut game, wolves[0], wolves[1]);
+        let events = play(&mut game, |_, t| match t.kind {
+            TurnKind::DayVote => target(wolves[0]),
+            _ => None,
+        });
+        assert_eq!(
+            deaths(&events),
+            [
+                (wolves[0], DeathCause::Vote),
+                (wolves[1], DeathCause::Heartbreak)
+            ]
+        );
+        assert_eq!(game.winner(), Some(Team::Village));
+        assert_eq!(game.days_played(), 1);
+        for p in 0..8 {
+            assert_eq!(game.won(p), !wolves.contains(&p), "seat {p}");
+        }
+
+        // Two villagers in love win with the village.
+        let mut game = cupid_game(8, false, 31);
+        let villagers = seats_with(&game, Role::Villager);
+        link(&mut game, villagers[0], villagers[1]);
+        play(&mut game, |g, t| match t.kind {
+            TurnKind::DayVote => g.living().find(|&p| g.is_wolf(p)).and_then(target),
+            _ => None,
+        });
+        assert_eq!(game.winner(), Some(Team::Village));
+        assert!(game.won(villagers[0]) && game.won(villagers[1]));
     }
 }

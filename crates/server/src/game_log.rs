@@ -87,6 +87,10 @@ pub struct PlayerSummary {
     pub invalid_actions: u32,
     /// The sheriff's shot, on the sheriff's entry only.
     pub shot: Option<ShotSummary>,
+    /// The partner Cupid linked this player to.
+    pub lover_of: Option<PlayerId>,
+    /// Shared the win; cross-team lovers win only as `lovers`.
+    pub won: bool,
 }
 
 #[derive(Serialize, Debug)]

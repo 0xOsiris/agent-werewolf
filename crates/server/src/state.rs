@@ -668,6 +668,8 @@ impl AppState {
                     timeouts: seat.timeouts,
                     invalid_actions: seat.invalid_actions,
                     shot,
+                    lover_of: game.lover_of(seat.public.id),
+                    won: game.won(seat.public.id),
                 }
             })
             .collect();

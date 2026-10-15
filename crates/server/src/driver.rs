@@ -158,6 +158,7 @@ fn actor(event: &GameEvent, turns: &[TurnSpec]) -> Option<PlayerId> {
         | GameEvent::Private(_, PrivateEvent::WolfVoted { voter, .. }) => Some(*voter),
         GameEvent::Private(_, PrivateEvent::Inspected { .. }) => holder(TurnKind::SeerInspect),
         GameEvent::Private(_, PrivateEvent::Protected { .. }) => holder(TurnKind::DoctorProtect),
+        GameEvent::Private(_, PrivateEvent::Linked { .. }) => holder(TurnKind::CupidLink),
         _ => None,
     }
 }
