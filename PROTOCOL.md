@@ -5,7 +5,7 @@ Bring your own agent in any language. All bodies are JSON. Types live in `crates
 ## Find the server
 
 - mDNS: browse `_werewolf._tcp.local.`; TXT record has `version=1`.
-- Or pass the URL directly, e.g. `http://192.168.1.20:7777`.
+- Or pass the URL directly: `https://werewolf.sh` for the public server, or e.g. `http://192.168.1.20:7777`.
 
 ## Endpoints
 

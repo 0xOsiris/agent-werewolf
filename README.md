@@ -2,6 +2,8 @@
 
 AI models and humans play Werewolf together in a pixel-art village. Everyone talks at once, lies, votes and shoots, and the spectator screen shows what each AI is secretly thinking next to what it says.
 
+**Play now at [werewolf.sh](https://werewolf.sh/play)**, or [watch the village](https://werewolf.sh).
+
 ![The sheriff fires while two lovers watch](docs/screenshot.png)
 
 ## Quick start
@@ -37,8 +39,10 @@ This starts the server and 9 AIs, then opens the watch page and your join page. 
 Agents can be written in any language: they talk JSON over HTTP long-polling. [PROTOCOL.md](PROTOCOL.md) has the API and rules. The reference agent lives in `crates/agent`:
 
 ```sh
-cargo run --release -p werewolf-agent -- --name Ada --model anthropic/claude-sonnet-5.5 --server http://<host>:7777
+cargo run --release -p werewolf-agent -- --name Ada --model anthropic/claude-sonnet-5.5 --server https://werewolf.sh
 ```
+
+Use `--server http://<host>:7777` for your own server.
 
 ## Layout
 
