@@ -1,17 +1,20 @@
 // Shared SSE → state reducer. Both pages feed `snapshot` and live events into a Game,
 // which updates `game.state` and tells listeners about each event (with `live` false on replay).
 
-export const ROLE_LABEL = { werewolf: "Werewolf", seer: "Seer", doctor: "Doctor", sheriff: "Sheriff", villager: "Villager" };
+export const ROLE_LABEL = {
+  werewolf: "Werewolf", seer: "Seer", doctor: "Doctor", sheriff: "Sheriff", cupid: "Cupid", villager: "Villager",
+};
 export const KIND_LABEL = {
   day_speak: "day speech", day_vote: "day vote", wolf_chat: "wolf chat",
   wolf_kill: "wolf kill", seer_inspect: "seer inspect", doctor_protect: "doctor protect",
-  sheriff_shoot: "sheriff shot",
+  sheriff_shoot: "sheriff shot", cupid_link: "cupid's arrow",
 };
 export const ROLE_GOAL = {
   werewolf: "Each night, pick a victim with your pack. By day, blend in. You win when wolves equal or outnumber everyone else.",
   seer: "Each night, inspect one player to learn if they are a werewolf. Help the village vote the wolves out.",
   doctor: "Each night, protect one player from the wolves (not the same player two nights in a row).",
   sheriff: "You have one bullet. Hit a wolf and only they die; hit anyone else and you die too.",
+  cupid: "On the first night, pick two players to fall in love (you may pick yourself). If one lover dies, the other dies of a broken heart.",
   villager: "Find the werewolves and vote them out before they eat the village.",
 };
 
@@ -21,7 +24,7 @@ export function rulesLine(s) {
   const wolves = s.wolves == null ? "auto wolves" : s.wolves + (s.wolves === 1 ? " wolf" : " wolves");
   const secs = Number(s.discussion_secs) || 0;
   const talk = secs % 60 === 0 ? secs / 60 + " min talk" : Math.round(secs) + "s talk";
-  return [wolves, s.sheriff ? "sheriff" : "no sheriff", talk].join(" · ");
+  return [wolves, s.sheriff && "sheriff", s.cupid && "cupid", talk].filter(Boolean).join(" · ");
 }
 
 export function emptyState() {
@@ -40,6 +43,10 @@ export function emptyState() {
     settings: null,
     // Sheriff who fired last, so the shot's deaths can name them.
     lastShot: null,
+    // Cupid's pair [a, b] when this viewer saw the link (spectator, Cupid).
+    lovers: null,
+    // This viewer's own partner when they are a lover: { partner, partner_role }.
+    inLove: null,
   };
 }
 
@@ -49,6 +56,7 @@ export function phaseTitle(phase, winner) {
   if (phase.kind === "over") {
     if (winner === "village") return "Village wins!";
     if (winner === "wolves") return "Werewolves win!";
+    if (winner === "lovers") return "Lovers win!";
     return "Game over";
   }
   return "Lobby";
@@ -202,6 +210,14 @@ export class Game {
         break;
       case "inspected":
         if (ev.is_werewolf) s.roles[ev.target] = s.roles[ev.target] || "werewolf";
+        break;
+      case "linked":
+        s.lovers = [ev.a, ev.b];
+        break;
+      case "in_love":
+        // Spectators get one per lover; only a lover's own stream makes this "mine".
+        if (!s.lovers) s.inLove = { partner: ev.partner, partner_role: ev.partner_role };
+        s.roles[ev.partner] = s.roles[ev.partner] || ev.partner_role;
         break;
     }
     this.emit(ev, live);

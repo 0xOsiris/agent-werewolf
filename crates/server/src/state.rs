@@ -24,8 +24,9 @@ use crate::{
     driver,
     engine::{Answer, Game, TurnSpec},
     error::HttpError,
-    game_log::{GameLog, GameSummary, PlayerSummary},
+    game_log::{GameLog, GameSummary, PlayerSummary, ShotSummary},
     sanitize,
+    settings::{Settings, SettingsBody},
     site::Site,
     spectator::{Broadcast, ChatState, PendingTurn, RoleEntry, SpectatorEvent, Viewer},
 };
@@ -63,6 +64,8 @@ struct Inner {
     feed: Vec<SpectatorEvent>,
     /// The open chat window and when it ends.
     chat: Option<(TurnKind, Instant)>,
+    /// Host-adjustable settings; they survive resets and apply at each start.
+    settings: Settings,
     next_turn_id: u64,
     /// Orders answers by arrival, so chat posts publish in the order they came in.
     next_answer_seq: u64,
@@ -126,6 +129,7 @@ impl AppState {
         shutdown: CancellationToken,
     ) -> Arc<Self> {
         let (events, _) = broadcast::channel(EVENT_BUFFER);
+        let settings = Settings::from_config(&config);
         Arc::new(Self {
             config,
             spectator_key,
@@ -139,6 +143,7 @@ impl AppState {
                 roles: Vec::new(),
                 feed: Vec::new(),
                 chat: None,
+                settings,
                 next_turn_id: 1,
                 next_answer_seq: 0,
                 games_started: 0,
@@ -252,7 +257,7 @@ impl AppState {
         }
         let seed = self.seed.wrapping_add(inner.games_started);
         let roster = inner.seats.iter().map(|s| s.public.clone()).collect();
-        let (game, events) = Game::new(roster, self.config.wolves, seed)
+        let (game, events) = Game::new(roster, inner.settings.setup, seed)
             .map_err(|err| HttpError::conflict(err.to_string()))?;
 
         inner.games_started += 1;
@@ -307,6 +312,26 @@ impl AppState {
         // Wakes pollers holding old tokens so they get 401 and re-join.
         self.bump();
         Ok(())
+    }
+
+    pub fn settings(&self) -> SettingsBody {
+        self.inner.lock().settings.body()
+    }
+
+    /// Replaces the lobby settings; they apply at the next start.
+    pub fn update_settings(&self, body: SettingsBody) -> Result<SettingsBody, HttpError> {
+        let mut inner = self.inner.lock();
+        if inner.status != Status::Lobby {
+            return Err(HttpError::conflict(
+                "settings can only change in the lobby; reset first",
+            ));
+        }
+        inner.settings = body
+            .validate(self.config.max_players)
+            .map_err(HttpError::Invalid)?;
+        let settings = inner.settings.body();
+        inner.publish(SpectatorEvent::Settings { settings });
+        Ok(settings)
     }
 
     /// Long-polls for this player's next turn or the game result.
@@ -400,6 +425,7 @@ impl AppState {
     pub(crate) fn begin_turns(&self, game: &Game, turns: &[TurnSpec]) {
         let now = Instant::now();
         let mut inner = self.inner.lock();
+        let human_timeout = inner.settings.human_turn_timeout;
         for spec in turns {
             let turn_id = inner.next_turn_id;
             inner.next_turn_id += 1;
@@ -413,12 +439,11 @@ impl AppState {
                 );
                 continue;
             };
-            let secs = if seat.public.human {
-                self.config.human_turn_timeout_secs
+            let timeout = if seat.public.human {
+                human_timeout
             } else {
-                self.config.turn_timeout_secs
+                Duration::from_secs(self.config.turn_timeout_secs)
             };
-            let timeout = Duration::from_secs(secs);
             let deadline_ms = millis(timeout);
             seat.answer = None;
             seat.pending = Some(Pending {
@@ -493,14 +518,15 @@ impl AppState {
 
     pub(crate) fn chat_rules(&self) -> ChatRules {
         let config = &self.config;
+        let settings = self.inner.lock().settings;
         ChatRules {
             human: Limits {
                 cooldown: config.chat_cooldown_secs,
                 max_messages: config.max_chat_messages,
             },
             ai: Limits {
-                cooldown: config.ai_chat_cooldown_secs,
-                max_messages: config.ai_max_chat_messages,
+                cooldown: settings.ai_chat_cooldown,
+                max_messages: settings.ai_max_chat_messages,
             },
             ai_jitter: config.ai_chat_jitter_secs,
             quiet: config.quiet_secs,
@@ -510,7 +536,7 @@ impl AppState {
     pub(crate) fn chat_length(&self, kind: TurnKind) -> Duration {
         match kind {
             TurnKind::WolfChat => self.config.wolf_chat_secs,
-            _ => self.config.discussion_secs,
+            _ => self.inner.lock().settings.discussion,
         }
     }
 
@@ -624,6 +650,13 @@ impl AppState {
             .zip(game.roles())
             .map(|(seat, &role)| {
                 let died_on = game.died_on(seat.public.id);
+                let shot = game
+                    .shot()
+                    .filter(|s| s.sheriff == seat.public.id)
+                    .map(|s| ShotSummary {
+                        target: s.target,
+                        hit_wolf: s.hit_wolf,
+                    });
                 PlayerSummary {
                     id: seat.public.id,
                     name: seat.public.name.clone(),
@@ -634,6 +667,7 @@ impl AppState {
                     died_on,
                     timeouts: seat.timeouts,
                     invalid_actions: seat.invalid_actions,
+                    shot,
                 }
             })
             .collect();
@@ -754,6 +788,11 @@ impl Inner {
                 self.phase = Phase::Over;
                 self.winner = Some(winner);
             }
+            PublicEvent::Shot { sheriff, .. } => {
+                if let Some(seat) = self.seats.get_mut(sheriff as usize) {
+                    seat.public.revealed_role = Some(Role::Sheriff);
+                }
+            }
             _ => {}
         }
     }
@@ -765,6 +804,7 @@ impl Inner {
         SpectatorEvent::Snapshot {
             phase: self.phase,
             winner: self.winner,
+            settings: self.settings.body(),
             players: self.seats.iter().map(|s| s.public.clone()).collect(),
             roles: viewer.visible_roles(&role_entries(roles), roles, over),
             events: self

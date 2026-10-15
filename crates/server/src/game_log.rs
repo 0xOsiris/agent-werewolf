@@ -85,6 +85,14 @@ pub struct PlayerSummary {
     pub died_on: Option<Phase>,
     pub timeouts: u32,
     pub invalid_actions: u32,
+    /// The sheriff's shot, on the sheriff's entry only.
+    pub shot: Option<ShotSummary>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct ShotSummary {
+    pub target: PlayerId,
+    pub hit_wolf: bool,
 }
 
 pub async fn write_summary(path: &Path, summary: &GameSummary) {

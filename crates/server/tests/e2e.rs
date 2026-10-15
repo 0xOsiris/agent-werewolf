@@ -10,7 +10,8 @@ use serde_json::Value;
 use tokio::{net::TcpListener, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 use werewolf_protocol::{
-    ActRequest, Action, JoinRequest, JoinResponse, Phase, PlayerView, Poll, Team, Turn, TurnKind,
+    ActRequest, Action, JoinRequest, JoinResponse, Phase, PlayerView, Poll, PublicEvent, Team,
+    Turn, TurnKind,
 };
 use werewolf_server::Config;
 
@@ -104,6 +105,22 @@ impl Server {
         self.get(&path).await
     }
 
+    async fn settings_get(&self, key: Option<&str>) -> Response {
+        let mut req = self.client.get(self.url("/admin/settings"));
+        if let Some(key) = key {
+            req = req.header("x-spectator-key", key);
+        }
+        req.send().await.unwrap()
+    }
+
+    async fn settings_put(&self, key: Option<&str>, body: &Value) -> Response {
+        let mut req = self.client.put(self.url("/admin/settings")).json(body);
+        if let Some(key) = key {
+            req = req.header("x-spectator-key", key);
+        }
+        req.send().await.unwrap()
+    }
+
     async fn admin(&self, path: &str, key: Option<&str>) -> Response {
         let mut req = self.client.post(self.url(path));
         if let Some(key) = key {
@@ -168,6 +185,28 @@ fn is_chat(kind: TurnKind) -> bool {
     matches!(kind, TurnKind::DaySpeak | TurnKind::WolfChat)
 }
 
+/// Other players' roles show only after death, or for a sheriff who has fired.
+fn assert_roles_hidden(view: &PlayerView) {
+    let fired: Vec<u32> = view
+        .public_log
+        .iter()
+        .filter_map(|e| match e {
+            PublicEvent::Shot { sheriff, .. } => Some(*sheriff),
+            _ => None,
+        })
+        .collect();
+    for p in &view.players {
+        if p.revealed_role.is_some() {
+            assert!(
+                !p.alive || fired.contains(&p.id),
+                "role of living {} leaked to {}",
+                p.id,
+                view.you
+            );
+        }
+    }
+}
+
 /// How one seat's game went.
 struct Played {
     winner: Team,
@@ -212,6 +251,7 @@ async fn bot(server: &Server, token: String, seed: u64, style: Style) -> Played 
                 tokio::time::sleep(Duration::from_millis(turn.deadline_ms + 200)).await;
             }
             Poll::Turn(turn) => {
+                assert_roles_hidden(&turn.view);
                 // Agents skip ids they already answered, so a reused id would stall them.
                 assert!(
                     answered.iter().all(|&(.., id)| id != turn.turn_id),
@@ -620,6 +660,18 @@ fn assert_visible(viewer: Option<usize>, roles: &[String], over: bool, event: &V
                 );
                 assert!(sees_turn(pending), "{viewer:?} saw pending {pending}");
             }
+            let fired: Vec<&Value> = event["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|e| e["event"]["type"] == "shot")
+                .map(|e| &e["event"]["sheriff"])
+                .collect();
+            for p in event["players"].as_array().unwrap() {
+                let revealed = !p["revealed_role"].is_null();
+                let allowed = p["alive"] == false || fired.contains(&&p["id"]);
+                assert!(!revealed || allowed, "{viewer:?} saw the role of {p}");
+            }
             let chat = &event["chat"];
             assert!(
                 chat.is_null() || chat["kind"] == "day_speak" || wolf,
@@ -716,6 +768,17 @@ async fn watch_streams_only_show_what_each_player_may_know() {
             roles[me] == "werewolf",
             "wolf chat window for {me}"
         );
+        if roles[me] == "sheriff" {
+            let died_night_one =
+                summary["players"][me]["died_on"] == serde_json::json!({ "kind": "night", "n": 1 });
+            let shoot_turn = events
+                .iter()
+                .any(|e| e["type"] == "turn_started" && e["kind"] == "sheriff_shoot");
+            assert!(
+                shoot_turn || died_night_one,
+                "the sheriff gets a turn on day 1"
+            );
+        }
         let start_roles = events.iter().find(|e| e["type"] == "roles").unwrap();
         let expected = if roles[me] == "werewolf" { 2 } else { 1 };
         assert_eq!(start_roles["roles"].as_array().unwrap().len(), expected);
@@ -749,7 +812,10 @@ async fn wolf_count_needs_enough_players() {
     }
     let res = server.admin("/admin/start", Some(KEY)).await;
     assert_eq!(res.status(), StatusCode::CONFLICT);
-    assert_eq!(error_of(res).await, "need at least 7 players for 3 wolves");
+    assert_eq!(
+        error_of(res).await,
+        "need at least 7 players for 3 wolves + sheriff"
+    );
     server.join_ok("p6").await;
     assert_eq!(server.join("late").await.status(), StatusCode::CONFLICT);
     server.stop().await;
@@ -909,5 +975,116 @@ async fn reissued_chat_turns_get_fresh_ids() {
         results.iter().any(|r| day_one_chat(r) >= 3),
         "expected re-issued chat turns on day 1"
     );
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn settings_are_lobby_only_validated_and_persistent() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start(dir.path(), &["--turn-timeout-secs=5"]).await;
+    let new = serde_json::json!({
+        "wolves": 2,
+        "sheriff": false,
+        "discussion_secs": 30,
+        "ai_chat_cooldown_secs": 1,
+        "ai_max_chat_messages": 2,
+        "human_turn_timeout_secs": 10,
+    });
+
+    assert_eq!(
+        server.settings_get(None).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        server.settings_put(Some("nope"), &new).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let initial: Value = server.settings_get(Some(KEY)).await.json().await.unwrap();
+    assert_eq!(initial["sheriff"], true);
+    assert_eq!(initial["wolves"], Value::Null);
+
+    // Everyone may see settings: spectators, players, and the audience.
+    let is_settings = |e: &Value| e["type"] == "settings";
+    let spectator = server.get(&format!("/spectate/events?key={KEY}")).await;
+    let spectator = tokio::spawn(read_events(spectator, is_settings));
+    let audience = tokio::spawn(read_events(server.watch(None).await, is_settings));
+
+    for (patch, field) in [
+        (serde_json::json!({ "wolves": 4 }), "wolves"),
+        (
+            serde_json::json!({ "discussion_secs": 10 }),
+            "discussion_secs",
+        ),
+        (
+            serde_json::json!({ "ai_chat_cooldown_secs": 0 }),
+            "ai_chat_cooldown_secs",
+        ),
+        (
+            serde_json::json!({ "ai_max_chat_messages": 21 }),
+            "ai_max_chat_messages",
+        ),
+        (
+            serde_json::json!({ "human_turn_timeout_secs": 301 }),
+            "human_turn_timeout_secs",
+        ),
+    ] {
+        let mut body = new.clone();
+        body.as_object_mut()
+            .unwrap()
+            .extend(patch.as_object().unwrap().clone());
+        let res = server.settings_put(Some(KEY), &body).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{field}");
+        assert!(error_of(res).await.contains(field));
+    }
+    let mut partial = new.clone();
+    partial.as_object_mut().unwrap().remove("sheriff");
+    assert_eq!(
+        server.settings_put(Some(KEY), &partial).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "PUT needs the full object"
+    );
+
+    let res = server.settings_put(Some(KEY), &new).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.json::<Value>().await.unwrap(), new);
+    for stream in [spectator, audience] {
+        let events = tokio::time::timeout(Duration::from_secs(5), stream)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(events[0]["settings"], initial, "snapshots carry settings");
+        assert_eq!(events.last().unwrap()["settings"], new);
+    }
+    let info: Value = server.get("/v1/info").await.json().await.unwrap();
+    assert_eq!(info["settings"], new);
+
+    // Settings survive a reset and apply at the next start.
+    assert_eq!(
+        server.admin("/admin/reset", Some(KEY)).await.status(),
+        StatusCode::OK
+    );
+    let kept: Value = server.settings_get(Some(KEY)).await.json().await.unwrap();
+    assert_eq!(kept, new);
+    for i in 0..5 {
+        server.join_ok(&format!("p{i}")).await;
+    }
+    assert_eq!(
+        server.admin("/admin/start", Some(KEY)).await.status(),
+        StatusCode::OK
+    );
+    let res = server.get(&format!("/spectate/events?key={KEY}")).await;
+    let snapshot = read_events(res, |_| true).await.remove(0);
+    assert_eq!(snapshot["settings"], new);
+    let roles: Vec<&str> = snapshot["roles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["role"].as_str().unwrap())
+        .collect();
+    assert_eq!(roles.iter().filter(|&&r| r == "werewolf").count(), 2);
+    assert!(!roles.contains(&"sheriff"));
+
+    let res = server.settings_put(Some(KEY), &new).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT, "lobby only");
     server.stop().await;
 }

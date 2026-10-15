@@ -804,7 +804,11 @@ mod tests {
         assert!(game.players[sheriff as usize].alive);
         assert_eq!(
             game.shot(),
-            Some(ShotRecord { sheriff, target: wolf, hit_wolf: true })
+            Some(ShotRecord {
+                sheriff,
+                target: wolf,
+                hit_wolf: true
+            })
         );
         assert_eq!(game.step, Step::DayVote);
     }
@@ -865,7 +869,9 @@ mod tests {
         let events = shoot(&mut game, Some(wolf));
         assert!(matches!(
             public(&events).last(),
-            Some(PublicEvent::GameOver { winner: Team::Village })
+            Some(PublicEvent::GameOver {
+                winner: Team::Village
+            })
         ));
         assert!(game.is_over());
 
@@ -885,7 +891,9 @@ mod tests {
         let events = shoot(&mut game, Some(innocent));
         assert!(matches!(
             public(&events).last(),
-            Some(PublicEvent::GameOver { winner: Team::Wolves })
+            Some(PublicEvent::GameOver {
+                winner: Team::Wolves
+            })
         ));
     }
 
@@ -1196,7 +1204,7 @@ mod tests {
                         matches!(&view.private_log[..], [PrivateEvent::Protected { target }] if *target == doctor)
                     );
                 }
-                Role::Villager => assert!(view.private_log.is_empty()),
+                Role::Villager | Role::Sheriff => assert!(view.private_log.is_empty()),
                 Role::Werewolf => {}
             }
         }

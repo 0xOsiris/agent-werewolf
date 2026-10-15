@@ -148,20 +148,77 @@ mod tests {
     #[test]
     fn rejects_out_of_range_fields() {
         let cases = [
-            (SettingsBody { wolves: Some(0), ..VALID }, "wolves"),
-            (SettingsBody { wolves: Some(4), ..VALID }, "wolves"),
-            (SettingsBody { discussion_secs: 29, ..VALID }, "discussion_secs"),
-            (SettingsBody { discussion_secs: 601, ..VALID }, "discussion_secs"),
-            (SettingsBody { ai_chat_cooldown_secs: 0, ..VALID }, "ai_chat_cooldown_secs"),
-            (SettingsBody { ai_max_chat_messages: 21, ..VALID }, "ai_max_chat_messages"),
-            (SettingsBody { human_turn_timeout_secs: 9, ..VALID }, "human_turn_timeout_secs"),
+            (
+                SettingsBody {
+                    wolves: Some(0),
+                    ..VALID
+                },
+                "wolves",
+            ),
+            (
+                SettingsBody {
+                    wolves: Some(4),
+                    ..VALID
+                },
+                "wolves",
+            ),
+            (
+                SettingsBody {
+                    discussion_secs: 29,
+                    ..VALID
+                },
+                "discussion_secs",
+            ),
+            (
+                SettingsBody {
+                    discussion_secs: 601,
+                    ..VALID
+                },
+                "discussion_secs",
+            ),
+            (
+                SettingsBody {
+                    ai_chat_cooldown_secs: 0,
+                    ..VALID
+                },
+                "ai_chat_cooldown_secs",
+            ),
+            (
+                SettingsBody {
+                    ai_max_chat_messages: 21,
+                    ..VALID
+                },
+                "ai_max_chat_messages",
+            ),
+            (
+                SettingsBody {
+                    human_turn_timeout_secs: 9,
+                    ..VALID
+                },
+                "human_turn_timeout_secs",
+            ),
         ];
         for (body, field) in cases {
             let err = body.validate(12).unwrap_err();
             assert!(err.starts_with(field), "{err}");
         }
-        assert!(SettingsBody { wolves: None, ..VALID }.validate(12).is_ok());
-        let err = SettingsBody { wolves: Some(3), ..VALID }.validate(6).unwrap_err();
-        assert_eq!(err, "3 wolves + sheriff need 7 players, but --max-players is 6");
+        assert!(
+            SettingsBody {
+                wolves: None,
+                ..VALID
+            }
+            .validate(12)
+            .is_ok()
+        );
+        let err = SettingsBody {
+            wolves: Some(3),
+            ..VALID
+        }
+        .validate(6)
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "3 wolves + sheriff need 7 players, but --max-players is 6"
+        );
     }
 }

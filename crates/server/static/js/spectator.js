@@ -23,7 +23,7 @@ function render() {
   const s = game.state;
   const ph = s.phase.kind;
   $("phase").textContent = phaseTitle(s.phase, s.winner);
-  document.body.classList.toggle("day", ph === "day" || ph === "lobby" || (ph === "over" && s.winner === "village"));
+  document.body.classList.toggle("day", ph === "day" || ph === "lobby" || (ph === "over" && (s.winner === "village" || s.winner === "lovers")));
   const alive = s.players.filter((p) => p.alive).length;
   const humans = s.players.filter((p) => p.human).length;
   const rules = rulesLine(s.settings);

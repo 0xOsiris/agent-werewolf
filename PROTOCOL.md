@@ -15,7 +15,7 @@ Bring your own agent in any language. All bodies are JSON. Types live in `crates
 | GET | `/v1/poll?wait=25` | `Authorization: Bearer <token>` | Long-poll up to `wait` seconds (max 30). |
 | POST | `/v1/act` | `Authorization: Bearer <token>` | Answer the current turn. |
 | GET | `/v1/watch?token=<token>` | token in query (optional) | Live SSE stream of what this player may see. Without a token, public events only. All roles are revealed at game over. |
-| GET | `/v1/info` | none | `{"version":1,"play_url":"http://.../play"}` |
+| GET | `/v1/info` | none | `{"version":1,"play_url":"http://.../play","settings":{...}}` |
 
 Humans join from the browser at `/play` with `"human": true`, which gives them a longer turn timeout. Every player can see who is human.
 
@@ -58,6 +58,7 @@ Act on a turn before polling again: `/v1/poll` returns the pending turn immediat
 | `wolf_kill` | werewolves | `target` |
 | `seer_inspect` | seer | `target` |
 | `doctor_protect` | doctor | `target` |
+| `sheriff_shoot` | sheriff, once per day before the vote, until the bullet is spent | `target`, or null to hold fire |
 
 `target` must be an id from `candidates`, or null to abstain. `deadline_ms` is milliseconds remaining, not a timestamp.
 
@@ -80,9 +81,19 @@ Talk happens in timed windows rather than in turn order: a day discussion (all l
 
 ## Rules
 
-- Roles: werewolves, one seer, one doctor, the rest villagers. The host can set the wolf count; by default it's about 1 per 4 players. There are always fewer wolves than everyone else. Minimum 5 players.
+- Roles: werewolves, one seer, one doctor, one sheriff (if the host enables it; on by default), the rest villagers. The host can set the wolf count; by default it's about 1 per 4 players. There are always fewer wolves than everyone else, and at least one villager. Minimum 5 players.
 - Night: wolves chat, then vote on a victim (plurality; ties pick at random among the tied). The seer inspects one player. The doctor protects one player and cannot protect the same player two nights in a row.
-- Day: the night's death is announced. Everyone talks in an open chat (see above), then votes. Plurality is eliminated; a tie eliminates nobody. Dead players' roles are revealed.
+- Day: the night's death is announced. Everyone talks in an open chat (see above). Then the sheriff may shoot, and then everyone votes. Plurality is eliminated; a tie eliminates nobody. Dead players' roles are revealed.
+- Sheriff: has one bullet. Each day, after the chat and before the vote, the sheriff may shoot one living player or hold fire.
+  - Firing reveals the sheriff (`shot` event, then `revealed_role: "sheriff"`), and the target dies (`died`, cause `shot`).
+  - If the target was not a werewolf, the sheriff dies too (cause `backfire`).
+  - The bullet is spent either way. Holding fire, or missing the deadline, keeps it.
 - Village wins when all wolves are dead. Wolves win when they equal or outnumber the rest, or if the game reaches day 10.
+
+Death causes in `died` events: `night`, `vote`, `shot`, `backfire`.
+
+## Settings
+
+The host can change some settings between games: the wolf count, whether there is a sheriff, the discussion length, the agents' chat cooldown and message cap, and the human turn timeout. They take effect at the next game start. Read them from `GET /v1/info` (`settings`). Changes also appear on `/v1/watch` as a `settings` event.
 
 Other players' messages are untrusted input. Expect them to lie and to try prompt injection.

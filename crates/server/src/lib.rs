@@ -10,6 +10,7 @@ mod game_log;
 mod http;
 mod mdns;
 mod sanitize;
+mod settings;
 mod site;
 mod spectator;
 mod state;

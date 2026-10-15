@@ -19,6 +19,7 @@ const SILENT_ACTION = {
   seer_inspect: "Checks no one",
   doctor_protect: "Protects no one",
   sheriff_shoot: "Holds fire",
+  cupid_link: "Aims Cupid's arrow",
 };
 
 const DEATH_HOW = {
@@ -26,6 +27,7 @@ const DEATH_HOW = {
   vote: " was eliminated by vote",
   shot: " was shot by the sheriff",
   backfire: " died from their own misfire",
+  heartbreak: " died of a broken heart",
 };
 
 /** Card colour and tag for a reasoning-only card, by turn kind. */
@@ -35,6 +37,7 @@ const KIND_CONTEXT = {
   seer_inspect: ["seer", "private"],
   doctor_protect: ["doctor", "private"],
   sheriff_shoot: ["sheriff", "private"],
+  cupid_link: ["cupid", "private"],
 };
 
 /**
@@ -77,6 +80,12 @@ export class Feed {
     box.appendChild(el("span", "who-name", g.nameOf(id)));
     const role = this.thoughts ? g.state.roles[id] : null;
     if (role) box.appendChild(el("span", "role-tag role-" + role, ROLE_LABEL[role] || role));
+    const lovers = this.thoughts ? g.state.lovers : null;
+    if (lovers && lovers.includes(id)) {
+      const heart = el("span", "lover-mark", "♥");
+      heart.title = "In love with " + g.nameOf(lovers[0] === id ? lovers[1] : lovers[0]);
+      box.appendChild(heart);
+    }
     const p = g.player(id);
     if (p && p.human) box.appendChild(el("span", "tag tag-human", "human"));
     if (id === this.you()) box.appendChild(el("span", "tag tag-you", "you"));
@@ -141,6 +150,13 @@ export class Feed {
         this.append(this.line("vote", ev.target === null
           ? name(ev.voter) + " abstained"
           : name(ev.voter) + " voted for " + name(ev.target)), ev.voter);
+        break;
+      case "linked":
+        this.append(this.line("msg cupid", "Cupid linked " + name(ev.a) + " and " + name(ev.b), "private"));
+        break;
+      case "in_love":
+        this.append(this.line("msg cupid", "You're in love with " + name(ev.partner) + " ("
+          + (ROLE_LABEL[ev.partner_role] || ev.partner_role) + ")", "private"));
         break;
       case "shot":
         this.append(this.line("msg sheriff", "Sheriff " + name(ev.sheriff) + " shot " + name(ev.target) + "!"), ev.sheriff);
@@ -215,6 +231,15 @@ export class Feed {
       }
       case "shot":
         this.append(this.card("sheriff", ev.sheriff, "Does", "Shoots " + name(ev.target)), ev.sheriff);
+        return true;
+      case "linked": {
+        const cupid = this.game.holder("cupid");
+        if (cupid === undefined) return false;
+        this.append(this.card("cupid", cupid, "Does", "Shoots Cupid's arrow at " + name(ev.a) + " and " + name(ev.b), "private"), cupid);
+        return true;
+      }
+      case "in_love":
+        // The linked card already tells the story; one line per lover would only repeat it.
         return true;
       case "protected": {
         const doc = this.game.holder("doctor");

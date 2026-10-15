@@ -7,7 +7,10 @@ use werewolf_protocol::{
     Phase, PlayerId, PrivateEvent, PublicEvent, PublicPlayer, Role, Team, TurnKind,
 };
 
-use crate::engine::{Audience, GameEvent};
+use crate::{
+    engine::{Audience, GameEvent},
+    settings::SettingsBody,
+};
 
 #[derive(Serialize, Clone, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -16,6 +19,7 @@ pub enum SpectatorEvent {
     Snapshot {
         phase: Phase,
         winner: Option<Team>,
+        settings: SettingsBody,
         players: Vec<PublicPlayer>,
         roles: Vec<RoleEntry>,
         /// Every `public`, `private`, and `reasoning` event so far, in order.
@@ -59,6 +63,10 @@ pub enum SpectatorEvent {
         open: bool,
         ends_in_ms: u64,
     },
+    /// The host changed the lobby settings.
+    Settings {
+        settings: SettingsBody,
+    },
     Reset,
 }
 
@@ -78,7 +86,10 @@ impl SpectatorEvent {
             return Some(Cow::Borrowed(self));
         }
         let visible = match self {
-            Self::PlayerJoined { .. } | Self::Public { .. } | Self::Reset => true,
+            Self::PlayerJoined { .. }
+            | Self::Public { .. }
+            | Self::Settings { .. }
+            | Self::Reset => true,
             Self::Private { audience, .. } => {
                 viewer.role(roles).and_then(Audience::of) == Some(*audience)
             }

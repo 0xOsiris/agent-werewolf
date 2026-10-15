@@ -13,13 +13,14 @@ const MAX_TEXT = 600;
 const CHAT_KINDS = new Set(["day_speak", "wolf_chat"]);
 const CHAT_MAX = 6;
 const CHAT_COOLDOWN_MS = 8000;
-const PRIVATE = new Set(["wolf_spoke", "wolf_voted", "inspected", "protected"]);
+const PRIVATE = new Set(["wolf_spoke", "wolf_voted", "inspected", "protected", "linked", "in_love"]);
 const TURN_TEXT = {
   day_vote: ["Vote to eliminate", "Tap a player in the village or pick from the list."],
   wolf_kill: ["Pick tonight's victim (wolves only)", "Your pack's votes decide who dies."],
   seer_inspect: ["Choose someone to inspect", "You will learn whether they are a werewolf."],
   doctor_protect: ["Choose someone to protect", "If the wolves pick them tonight, they survive."],
   sheriff_shoot: ["Sheriff: shoot or hold fire", "Hit a wolf and only they die. Hit anyone else and you die too."],
+  cupid_link: ["Choose the first lover", "You can pick yourself. If one lover dies, so does the other."],
 };
 
 // ------------------------------------------------------------ storage
@@ -64,6 +65,8 @@ let chatSent = 0;
 let chatLastSent = 0;
 let chatBuzzed = false;
 let chatBusy = false;
+// Cupid answers two link turns in a row; the second picks the other lover.
+let cupidPicks = 0;
 
 const game = new Game();
 const you = () => (session ? session.player_id : null);
@@ -141,7 +144,11 @@ function render() {
       ? "Your pack: " + pack.map((id) => game.nameOf(id) + (game.player(id)?.alive === false ? " (dead)" : "")).join(", ")
       : role === "werewolf" ? "You hunt alone." : "";
   }
-  $("private-card").hidden = !role || role === "villager" || role === "sheriff";
+  const partner = lovePartner();
+  $("role-love").textContent = partner === null ? ""
+    : "You're in love with " + game.nameOf(partner) + (s.roles[partner] ? " (" + (ROLE_LABEL[s.roles[partner]] || s.roles[partner]) + ")" : "")
+      + ". If one of you dies, so does the other.";
+  $("private-card").hidden = !role || ((role === "villager" || role === "sheriff") && partner === null);
   const rules = rulesLine(s.settings);
   $("role-rules").textContent = rules ? "Rules: " + rules : "";
   $("status-rules").textContent = rules && s.phase.kind === "lobby" ? "Rules: " + rules : "";
@@ -205,7 +212,18 @@ async function postJoin(name) {
   return { status: res.status, body };
 }
 
+/** My partner's id if I'm one of the lovers, else null. */
+function lovePartner() {
+  const s = game.state;
+  if (!session) return null;
+  if (s.inLove) return s.inLove.partner;
+  const me = session.player_id;
+  if (s.lovers && s.lovers.includes(me)) return s.lovers[0] === me ? s.lovers[1] : s.lovers[0];
+  return null;
+}
+
 function startSession(s) {
+  cupidPicks = 0;
   session = s;
   store(SESSION_KEY, s);
   store(NAME_KEY, s.name);
@@ -359,7 +377,8 @@ async function pollLoop(gen) {
 function showTurn(t) {
   turn = { ...t, deadline: performance.now() + t.deadline_ms, settle: () => {} };
   selected = null;
-  const [title, help] = TURN_TEXT[t.kind] || [t.kind, ""];
+  let [title, help] = TURN_TEXT[t.kind] || [t.kind, ""];
+  if (t.kind === "cupid_link" && cupidPicks > 0) title = "Choose the second lover";
   $("act-title").textContent = title;
   $("act-help").textContent = help;
   $("act-error").textContent = "";
@@ -377,7 +396,8 @@ function showTurn(t) {
   $("act-cands").replaceChildren(...buttons);
   const shoot = t.kind === "sheriff_shoot";
   $("action").classList.toggle("shoot", shoot);
-  $("act-abstain").textContent = shoot ? "Hold fire" : t.kind === "wolf_kill" ? "Spare everyone" : "Abstain";
+  $("act-abstain").textContent = shoot ? "Hold fire" : t.kind === "wolf_kill" ? "Spare everyone"
+    : t.kind === "cupid_link" ? "No lovers" : "Abstain";
   scene.setPicking(t.candidates, null);
   updateSelection();
   $("action").hidden = false;
@@ -549,6 +569,7 @@ async function act(action) {
       signal: AbortSignal.timeout(10000),
     });
     if (res.ok) {
+      if (current.kind === "cupid_link") cupidPicks = action.target === null ? 2 : cupidPicks + 1;
       hideTurn();
       notice("Choice locked in.");
       return;

@@ -31,6 +31,7 @@ use werewolf_protocol::{
 use crate::{
     assets,
     error::HttpError,
+    settings::SettingsBody,
     spectator::{Broadcast, SpectatorEvent, Viewer},
     state::{AppState, Subscription, Watcher},
 };
@@ -54,6 +55,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/v1/watch", get(watch))
         .route("/admin/start", post(admin_start))
         .route("/admin/reset", post(admin_reset))
+        .route("/admin/settings", get(get_settings).put(put_settings))
         .route("/spectate/events", get(spectate))
         .fallback(|| async { HttpError::NotFound })
         .method_not_allowed_fallback(|| async { HttpError::MethodNotAllowed })
@@ -78,12 +80,14 @@ async fn qr(State(app): State<Arc<AppState>>) -> Response {
 struct Info {
     version: u32,
     play_url: String,
+    settings: SettingsBody,
 }
 
 async fn info(State(app): State<Arc<AppState>>) -> Json<Info> {
     Json(Info {
         version: PROTOCOL_VERSION,
         play_url: app.site().play_url.clone(),
+        settings: app.settings(),
     })
 }
 
@@ -138,6 +142,25 @@ async fn admin_reset(
     app.check_key(admin_key(&headers))?;
     app.reset()?;
     Ok(Json(Empty {}))
+}
+
+async fn get_settings(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<SettingsBody>, HttpError> {
+    app.check_key(admin_key(&headers))?;
+    Ok(Json(app.settings()))
+}
+
+async fn put_settings(
+    State(app): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Result<JsonBody<SettingsBody>, HttpError>,
+) -> Result<Json<SettingsBody>, HttpError> {
+    // Authenticate before looking at the body.
+    app.check_key(admin_key(&headers))?;
+    let JsonBody(settings) = body?;
+    app.update_settings(settings).map(Json)
 }
 
 fn admin_key(headers: &HeaderMap) -> Option<&str> {

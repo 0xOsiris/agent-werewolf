@@ -600,6 +600,12 @@ export class Scene {
       case "wolf_voted":
         this.arrowSet("wolf").votes.push({ voter: ev.voter, target: ev.target, born: now });
         break;
+      case "linked": {
+        // Cupid's arrow flies from Cupid (if known) to the first lover, then on to the second.
+        const cupid = this.game.holder("cupid");
+        this.effects.push({ type: "cupid", id: cupid ?? ev.a, a: ev.a, b: ev.b, start: now, dur: 1500 });
+        break;
+      }
       case "shot":
         // Muzzle flash, tracer, hit flash; the target's death follows as its own event.
         this.effects.push({ type: "shot", id: ev.sheriff, target: ev.target, start: now, dur: 900 });
@@ -614,9 +620,10 @@ export class Scene {
           // The dead stop talking; their bubbles would also hide the death effects.
           this.retireStack(a, now);
           a.deathCause = ev.cause;
-          const delay = { vote: 1500, night: 900, shot: 250, backfire: 700 }[ev.cause] ?? 900;
+          const delay = { vote: 1500, night: 900, shot: 250, backfire: 700, heartbreak: 1300 }[ev.cause] ?? 900;
           a.deathAt = Math.max(now + delay, ev.cause === "shot" ? this.shotLandsAt || 0 : 0);
           if (ev.cause === "night") this.effects.push({ type: "slash", id: ev.player, start: now, dur: 1100 });
+          if (ev.cause === "heartbreak") this.effects.push({ type: "heartbreak", id: ev.player, start: now, dur: 2200 });
           if (ev.cause === "backfire") {
             this.effects.push({ type: "misfire", id: ev.player, start: now, dur: 2000 });
             this.puff(Math.round(a.x), Math.round(a.y) - 12, 16, ["#c0cbdc", "#8a8fa6", "#5d6482"]);
@@ -631,6 +638,8 @@ export class Scene {
           const sheriff = shot ? this.game.nameOf(shot.sheriff) : "the sheriff";
           this.toast("Sheriff " + sheriff + " shot " + name + " — "
             + (ev.role === "werewolf" ? "Werewolf!" : role + ". The sheriff dies too."), "death");
+        } else if (ev.cause === "heartbreak") {
+          this.toast(name + " died of a broken heart — " + role, "love");
         } else if (ev.cause !== "backfire") {
           const how = ev.cause === "night" ? " was killed in the night" : " was eliminated";
           this.toast(name + how + " — " + role, "death");
@@ -914,6 +923,7 @@ export class Scene {
     ctx.drawImage(fire, this.fx - 10, this.fy - 18);
     this.updateParticles(dt, t);
 
+    this.drawLovers(t);
     this.drawVotes(t);
     for (const a of order) this.drawActorHud(a, t, this.game.player(a.id));
     this.drawEffects(t);
@@ -1134,6 +1144,18 @@ export class Scene {
       const y = Math.round(a.y);
       if (e.type === "shot") {
         this.drawShot(e, a, now);
+      } else if (e.type === "cupid") {
+        this.drawCupidArrow(e, a, now);
+      } else if (e.type === "heartbreak") {
+        // The heart pops up over the partner, then splits apart.
+        const img = SPRITES.brokenHeart;
+        const half = Math.floor(img.width / 2);
+        const gap = Math.round(clamp((k - 0.25) / 0.5, 0, 1) * 4);
+        const top = Math.max(y - 38 - Math.round(k * 4), 5 + 10 * this.bannerScale);
+        ctx.globalAlpha = k > 0.8 ? (1 - k) / 0.2 : 1;
+        ctx.drawImage(img, 0, 0, half, img.height, x - half - gap, top + gap, half, img.height);
+        ctx.drawImage(img, half, 0, img.width - half, img.height, x + gap, top, img.width - half, img.height);
+        ctx.globalAlpha = 1;
       } else if (e.type === "misfire") {
         ctx.globalAlpha = k > 0.8 ? (1 - k) / 0.2 : 1;
         const txt = pixelText("MISFIRE!", "#ff8a3d");
@@ -1167,6 +1189,78 @@ export class Scene {
         const txt = pixelText(e.wolf ? "WOLF!" : "NOT WOLF", e.wolf ? "#ff4d5e" : "#3ddc97");
         ctx.drawImage(txt, clamp(x - Math.round(txt.width / 2), 1, this.W - txt.width - 1), top);
         ctx.globalAlpha = 1;
+      }
+    }
+  }
+
+  /** The lovers' pair this viewer may know: Cupid's link, or "me and my partner". */
+  loversPair() {
+    const s = this.game.state;
+    if (s.lovers) return s.lovers;
+    const me = this.you();
+    return s.inLove && me !== null ? [me, s.inLove.partner] : null;
+  }
+
+  /** A pulsing pink dotted link with a heart between living lovers. */
+  drawLovers(t) {
+    const pair = this.loversPair();
+    if (!pair) return;
+    const [a, b] = pair.map((id) => this.actors.get(id));
+    const [pa, pb] = pair.map((id) => this.game.player(id));
+    if (!a || !b || !pa || !pb || !pa.alive || !pb.alive) return;
+    // Wait for Cupid's arrow to land before the link appears.
+    if (this.effects.some((e) => e.type === "cupid" && performance.now() - e.start < 1100)) return;
+    const ctx = this.ctx;
+    const x0 = Math.round(a.x);
+    const y0 = Math.round(a.y - 12);
+    const x1 = Math.round(b.x);
+    const y1 = Math.round(b.y - 12);
+    const n = Math.max(1, Math.round(Math.hypot(x1 - x0, y1 - y0) / 3));
+    const pulse = 0.55 + 0.35 * Math.sin(t * 0.006);
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = "#ff77a8";
+    const shift = Math.floor(t / 120) % 3;
+    for (let i = 0; i < n; i++) {
+      if ((i + shift) % 3 === 2) continue;
+      ctx.fillRect(Math.round(x0 + ((x1 - x0) * i) / n), Math.round(y0 + ((y1 - y0) * i) / n), 1, 1);
+    }
+    ctx.globalAlpha = 1;
+    const heart = SPRITES.loveHeart;
+    const bob = Math.round(Math.sin(t * 0.006) * 1.5);
+    ctx.drawImage(heart, Math.round((x0 + x1) / 2 - heart.width / 2), Math.round((y0 + y1) / 2 - heart.height / 2) + bob);
+  }
+
+  /** Cupid's arrow: from Cupid to the first lover, then on to the second, with heart sparks. */
+  drawCupidArrow(e, a, now) {
+    const la = this.actors.get(e.a);
+    const lb = this.actors.get(e.b);
+    if (!la || !lb) return;
+    const ms = now - e.start;
+    const legs = [[a, la, 0, 500], [la, lb, 550, 1050]];
+    const ctx = this.ctx;
+    for (const [from, to, t0, t1] of legs) {
+      if (ms < t0 || ms > t1 + 450) continue;
+      const p = clamp((ms - t0) / (t1 - t0), 0, 1);
+      const x0 = from.x;
+      const y0 = from.y - 14;
+      const x1 = to.x;
+      const y1 = to.y - 12;
+      // A gentle arc so the arrow reads as lobbed rather than fired.
+      const hx = x0 + (x1 - x0) * p;
+      const hy = y0 + (y1 - y0) * p - Math.sin(p * Math.PI) * 10;
+      const back = Math.max(0, p - 0.12);
+      const tx = x0 + (x1 - x0) * back;
+      const ty = y0 + (y1 - y0) * back - Math.sin(back * Math.PI) * 10;
+      if (p < 1) {
+        ctx.fillStyle = "#c08040";
+        pixLine(ctx, tx, ty, hx, hy);
+        ctx.fillStyle = "#ff77a8";
+        ctx.fillRect(Math.round(tx) - 1, Math.round(ty) - 1, 2, 2);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(Math.round(hx), Math.round(hy), 1, 1);
+      } else if (!e["hit" + t0]) {
+        e["hit" + t0] = true;
+        this.puff(Math.round(x1), Math.round(y1), 12, ["#ff77a8", "#ffb3d1", "#ffffff"]);
       }
     }
   }
@@ -1244,10 +1338,13 @@ export class Scene {
       const c = this.chimneys[Math.floor(Math.random() * this.chimneys.length)];
       this.particles.push({ x: c.x, y: c.y, vx: 0.006, vy: -0.008, life: 0, max: 2200, color: "#c0cbdc", size: 2, smoke: true });
     }
-    if (s.phase.kind === "over" && s.winner === "village" && this.overAt && performance.now() - this.overAt < 6000 && Math.random() < dt * 0.05) {
+    const party = s.winner === "village" || s.winner === "lovers";
+    if (s.phase.kind === "over" && party && this.overAt && performance.now() - this.overAt < 6000 && Math.random() < dt * 0.05) {
+      const colors = s.winner === "lovers" ? ["#ff77a8", "#ffb3d1", "#ff4d6d", "#ffffff"]
+        : ["#ffd23f", "#e43b44", "#3ddc97", "#0099db", "#ff77a8"];
       this.particles.push({
         x: Math.random() * this.W, y: -2, vx: (Math.random() - 0.5) * 0.02, vy: 0.03 + Math.random() * 0.03,
-        life: 0, max: 5000, color: ["#ffd23f", "#e43b44", "#3ddc97", "#0099db", "#ff77a8"][Math.floor(Math.random() * 5)], size: 2,
+        life: 0, max: 5000, color: colors[Math.floor(Math.random() * colors.length)], size: 2,
       });
     }
     this.particles = this.particles.filter((p) => (p.life += dt) < p.max);
@@ -1268,7 +1365,8 @@ export class Scene {
     const s = this.game.state;
     const over = s.phase.kind === "over";
     const text = this.banner.text;
-    const color = over ? (s.winner === "wolves" ? "#ff4d5e" : "#ffd23f") : s.phase.kind === "night" ? "#c7d2ff" : "#ffffff";
+    const winColor = { wolves: "#ff4d5e", lovers: "#ff77a8" }[s.winner] || "#ffd23f";
+    const color = over ? winColor : s.phase.kind === "night" ? "#c7d2ff" : "#ffffff";
     const img = pixelText(text, color);
     const fit = (want) => Math.max(1, Math.min(want, Math.floor((this.W - 6) / img.width)));
     const age = now - this.banner.at;
