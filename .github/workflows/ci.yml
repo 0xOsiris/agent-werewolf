@@ -25,3 +25,60 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: shellcheck -x --severity=warning scripts/*.sh
+
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
+      - run: forge fmt --check
+      - run: forge build --sizes
+      - run: forge test
+
+  zk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: zk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            zk
+            zk/program
+      - name: Install SP1 v6.1.0
+        env:
+          # sp1up and `cargo prove install-toolchain` query the GitHub API.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -sSfL https://sp1up.succinct.xyz | bash
+          ~/.sp1/bin/sp1up --version v6.1.0
+          echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
+      - run: cargo fmt --check && cargo fmt --check --manifest-path program/Cargo.toml
+      - run: cargo test --release --locked
+
+  js:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node --test crates/server/tests/js/*.test.mjs
+      - name: No HTML-injection sinks in the web UI
+        run: |
+          ! grep -rnE 'innerHTML|outerHTML|insertAdjacentHTML|eval\(|new Function' crates/server/static
