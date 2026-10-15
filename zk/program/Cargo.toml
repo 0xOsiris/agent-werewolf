@@ -1,0 +1,21 @@
+[package]
+name = "werewolf-program"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Its own workspace: the guest's lockfile and precompile patches stay out of the host build.
+[workspace]
+
+[dependencies]
+alloy-sol-types = "1.7.3"
+serde_json = "1"
+sp1-zkvm = "=6.1.0"
+werewolf-verify = { path = "../../crates/verify", default-features = false }
+
+# SP1 precompiles for SHA-256, Keccak (alloy-primitives hashes with sha3) and Ed25519.
+[patch.crates-io]
+curve25519-dalek = { git = "https://github.com/sp1-patches/curve25519-dalek", tag = "patch-4.1.3-sp1-6.0.0" }
+sha2 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", tag = "patch-sha2-0.10.9-sp1-6.2.0" }
+sha3 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", tag = "patch-sha3-0.11.0-sp1-6.0.0" }

@@ -1,0 +1,9 @@
+# Kept out of the root workspace so its CI stays fast. `program` is its own workspace.
+[workspace]
+resolver = "3"
+members = ["script"]
+exclude = ["program"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
