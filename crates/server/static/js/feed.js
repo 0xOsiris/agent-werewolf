@@ -20,6 +20,7 @@ const SILENT_ACTION = {
   doctor_protect: "Protects no one",
   sheriff_shoot: "Holds fire",
   cupid_link: "Aims Cupid's arrow",
+  dead_chat: "Stays silent",
 };
 
 const DEATH_HOW = {
@@ -38,6 +39,7 @@ const KIND_CONTEXT = {
   doctor_protect: ["doctor", "private"],
   sheriff_shoot: ["sheriff", "private"],
   cupid_link: ["cupid", "private"],
+  dead_chat: ["ghosts", "graveyard"],
 };
 
 /**
@@ -180,6 +182,9 @@ export class Feed {
       case "wolf_spoke":
         this.append(this.bubble("wolves", ev.player, ev.text, "wolves only"), ev.player);
         break;
+      case "dead_spoke":
+        this.append(this.bubble("ghosts", ev.player, ev.text, "graveyard"), ev.player);
+        break;
       case "wolf_voted":
         this.append(this.line("msg wolves", ev.target === null
           ? name(ev.voter) + " wants to spare everyone"
@@ -215,6 +220,9 @@ export class Feed {
         return true;
       case "wolf_spoke":
         this.append(this.card("wolves", ev.player, "Says", ev.text, "wolves only"), ev.player);
+        return true;
+      case "dead_spoke":
+        this.append(this.card("ghosts", ev.player, "Says", ev.text, "graveyard"), ev.player);
         return true;
       case "voted":
         this.append(this.card("", ev.voter, "Does",

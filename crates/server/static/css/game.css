@@ -29,6 +29,8 @@
   --tag-ink: #1a1c2c;
   --wolf-bubble-bg: #ffe1e4;
   --wolf-ink: #a22633;
+  --ghost: #aab3d4;
+  --ghost-tint: rgba(170, 179, 212, 0.12);
   --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
@@ -51,6 +53,8 @@ body.day {
   --sheriff-tint: rgba(154, 106, 18, 0.12);
   --cupid: #c2185b;
   --cupid-tint: rgba(194, 24, 91, 0.10);
+  --ghost: #6f7792;
+  --ghost-tint: rgba(111, 119, 146, 0.12);
   --villager: #4a4f63;
   --death: #c0392b;
   --think-bg: rgba(106, 43, 217, 0.09);
@@ -340,6 +344,9 @@ canvas.pixel, .pixel { image-rendering: pixelated; image-rendering: crisp-edges;
 .sheriff .tag { color: var(--sheriff); }
 .cupid { background: var(--cupid-tint); border-left-color: var(--cupid); }
 .cupid .tag { color: var(--cupid); }
+.ghosts { background: var(--ghost-tint); border-left: 6px dashed var(--ghost); }
+.ghosts .tag { color: var(--ghost); }
+.ghosts .msg-text, .ghosts .act-text { font-style: italic; color: var(--muted); }
 .lover-mark { color: var(--cupid); font-size: 0.95em; line-height: 1; }
 .line { padding: 2px 14px; color: var(--muted); }
 .line.msg { color: var(--text); padding: 8px 14px; }
@@ -388,6 +395,7 @@ canvas.pixel, .pixel { image-rendering: pixelated; image-rendering: crisp-edges;
 .act.doctor { background: var(--doctor-tint); border-left-color: var(--doctor); }
 .act.sheriff { background: var(--sheriff-tint); border-left-color: var(--sheriff); }
 .act.cupid { background: var(--cupid-tint); border-left-color: var(--cupid); }
+.act.ghosts { background: var(--ghost-tint); border-left: 6px dashed var(--ghost); }
 .act-row { display: grid; grid-template-columns: 4.8em minmax(0, 1fr); gap: 8px; align-items: start; }
 .act-label {
   display: flex;
@@ -590,6 +598,9 @@ textarea { resize: vertical; min-height: 96px; }
 .chat-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .chat-head span { font-weight: 800; white-space: nowrap; }
 .action.chat.wolf h3 { color: var(--wolf); }
+.action.chat.ghost { background: linear-gradient(var(--ghost-tint), var(--ghost-tint)), var(--panel); }
+.action.chat.ghost h3 { color: var(--ghost); }
+.action.chat.ghost textarea { border-style: dashed; font-style: italic; }
 .chat-log { max-height: 24vh; min-height: 64px; font-size: 14px; padding: 2px 4px 2px 0; }
 .chat-log .msg { padding: 6px 10px; }
 .chat-meta { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 13px; }

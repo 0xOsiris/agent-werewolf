@@ -10,7 +10,7 @@ const SESSION_KEY = "werewolf.session";
 const NAME_KEY = "werewolf.name";
 const MAX_TEXT = 600;
 // Open chat: speak turns repeat during a window, with a cooldown and a per-window cap.
-const CHAT_KINDS = new Set(["day_speak", "wolf_chat"]);
+const CHAT_KINDS = new Set(["day_speak", "wolf_chat", "dead_chat"]);
 const CHAT_MAX = 6;
 const CHAT_COOLDOWN_MS = 8000;
 const PRIVATE = new Set(["wolf_spoke", "wolf_voted", "inspected", "protected", "linked", "in_love"]);
@@ -69,13 +69,18 @@ let chatBusy = false;
 const game = new Game();
 const you = () => (session ? session.player_id : null);
 const scene = new Scene($("scene"), game, { you, onPick: (id) => pick(id) });
-new Feed($("feed"), game, { filter: (ev) => !PRIVATE.has(ev.type), you, emptyText: "The village is quiet…" });
+new Feed($("feed"), game, {
+  filter: (ev) => !PRIVATE.has(ev.type) && ev.type !== "dead_spoke",
+  you,
+  emptyText: "The village is quiet…",
+});
 new Feed($("private-feed"), game, { filter: (ev) => PRIVATE.has(ev.type), you, emptyText: "Nothing secret yet." });
 new Feed($("chat-log"), game, {
   filter: (ev) => ev.type === "spoke" || ev.type === "wolf_spoke" || ev.type === "phase_started",
   you,
   emptyText: "No messages yet.",
 });
+new Feed($("grave-log"), game, { filter: (ev) => ev.type === "dead_spoke", you, emptyText: "The graveyard is quiet…" });
 $("brand").prepend(iconCanvas("werewolf", 3));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -452,22 +457,31 @@ function dropChatTurn() {
 function renderChat() {
   const s = game.state;
   const me = session ? game.player(session.player_id) : null;
-  const open = !!(me && me.alive && (chatTurn || s.chat));
+  // The dead get the graveyard instead of the village's chat.
+  const ghost = !!(me && !me.alive);
+  const room = ghost ? s.deadChat : s.chat;
+  const turnHere = !!chatTurn && (chatTurn.kind === "dead_chat") === ghost;
+  const open = !!(me && (turnHere || room));
   const box = $("chat");
+  const log = $(ghost ? "grave-log" : "chat-log");
+  $("chat-log").hidden = ghost;
+  $("grave-log").hidden = !ghost;
   if (box.hidden === open) {
     box.hidden = !open;
     syncSpacer();
-    if (open) $("chat-log").scrollTop = $("chat-log").scrollHeight;
+    if (open) log.scrollTop = log.scrollHeight;
   }
   if (!open) return;
   const now = performance.now();
-  const kind = s.chat ? s.chat.kind : chatTurn.kind;
-  const endsAt = s.chat ? s.chat.endsAt : chatTurn.deadline;
+  const kind = room ? room.kind : chatTurn.kind;
+  const endsAt = room ? room.endsAt : chatTurn.deadline;
   const wolf = kind === "wolf_chat";
-  $("chat-title").textContent = wolf ? "Wolf chat" : "Open discussion";
+  $("chat-title").textContent = ghost ? "Graveyard" : wolf ? "Wolf chat" : "Open discussion";
   $("chat-time").textContent = clock(endsAt - now) + " left";
   box.classList.toggle("wolf", wolf);
-  $("chat-text").placeholder = wolf ? "Plot with your pack…" : "Say something to the village…";
+  box.classList.toggle("ghost", ghost);
+  $("chat-text").placeholder = ghost ? "Only the dead will hear you…"
+    : wolf ? "Plot with your pack…" : "Say something to the village…";
   const left = Math.max(0, CHAT_MAX - chatSent);
   $("chat-left").textContent = left + " of " + CHAT_MAX + " left";
   let status = "";

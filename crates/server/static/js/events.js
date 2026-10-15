@@ -7,7 +7,7 @@ export const ROLE_LABEL = {
 export const KIND_LABEL = {
   day_speak: "day speech", day_vote: "day vote", wolf_chat: "wolf chat",
   wolf_kill: "wolf kill", seer_inspect: "seer inspect", doctor_protect: "doctor protect",
-  sheriff_shoot: "sheriff shot", cupid_link: "cupid's arrow",
+  sheriff_shoot: "sheriff shot", cupid_link: "cupid's arrow", dead_chat: "graveyard",
 };
 export const ROLE_GOAL = {
   werewolf: "Each night, pick a victim with your pack. By day, blend in. You win when wolves equal or outnumber everyone else.",
@@ -39,6 +39,8 @@ export function emptyState() {
     wolfVotes: [],
     // Open chat window: { kind: "day_speak" | "wolf_chat", endsAt: performance.now() ms } or null.
     chat: null,
+    // Open dead chat, alongside the day's chat; only dead players and spectators see it.
+    deadChat: null,
     // Host settings (see /admin/settings), or null before the first snapshot.
     settings: null,
     // Sheriff who fired last, so the shot's deaths can name them.
@@ -128,6 +130,7 @@ export class Game {
         this.state.winner = ev.winner ?? null;
         const now = performance.now();
         if (ev.chat) this.state.chat = { kind: ev.chat.kind, endsAt: now + ev.chat.ends_in_ms };
+        if (ev.dead_chat) this.state.deadChat = { kind: ev.dead_chat.kind, endsAt: now + ev.dead_chat.ends_in_ms };
         for (const t of ev.pending || []) {
           this.state.pending[t.player] = { kind: t.kind, deadline: now + t.deadline_ms };
         }
@@ -150,10 +153,13 @@ export class Game {
         delete s.pending[ev.player];
         this.emit(ev, true);
         return;
-      case "chat_window":
-        s.chat = ev.open ? { kind: ev.kind, endsAt: performance.now() + ev.ends_in_ms } : null;
+      case "chat_window": {
+        const room = ev.open ? { kind: ev.kind, endsAt: performance.now() + ev.ends_in_ms } : null;
+        if (ev.kind === "dead_chat") s.deadChat = room;
+        else s.chat = room;
         this.emit(ev, true);
         return;
+      }
       case "settings":
         s.settings = ev.settings;
         this.emit(ev, true);
@@ -182,6 +188,7 @@ export class Game {
       case "phase_started":
         s.phase = ev.phase;
         s.chat = null;
+        s.deadChat = null;
         s.tally = {};
         s.votes = [];
         s.wolfVotes = [];
@@ -212,6 +219,7 @@ export class Game {
         s.winner = ev.winner;
         s.pending = {};
         s.chat = null;
+        s.deadChat = null;
         break;
     }
     this.emit(ev, live);
