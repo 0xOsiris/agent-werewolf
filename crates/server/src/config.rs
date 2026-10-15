@@ -77,6 +77,9 @@ pub struct Config {
     /// Don't advertise the server over mDNS.
     #[arg(long)]
     pub no_mdns: bool,
+    /// Turn off the dead chat, so dead players get no more turns.
+    #[arg(long)]
+    pub no_dead_chat: bool,
     /// Key for the spectator page and admin endpoints. Random if omitted.
     #[arg(long)]
     pub spectator_key: Option<String>,

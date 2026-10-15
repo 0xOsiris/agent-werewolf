@@ -22,6 +22,13 @@ pub fn new_wolf_chat(log: &[PrivateEvent], you: PlayerId) -> &[PrivateEvent] {
     after_last(tonight(log), |e| wolf_said_by(e, you))
 }
 
+/// Dead chat that `you` haven't responded to yet.
+pub fn new_dead_chat(log: &[PrivateEvent], you: PlayerId) -> impl Iterator<Item = &PrivateEvent> {
+    after_last(log, |e| dead_said_by(e, you))
+        .iter()
+        .filter(|e| matches!(e, PrivateEvent::DeadSpoke { .. }))
+}
+
 /// How many messages this player has sent in the current window of a chat turn.
 pub fn own_messages(view: &PlayerView, kind: TurnKind) -> usize {
     match kind {
@@ -43,6 +50,10 @@ fn said_by(event: &PublicEvent, you: PlayerId) -> bool {
 
 fn wolf_said_by(event: &PrivateEvent, you: PlayerId) -> bool {
     matches!(event, PrivateEvent::WolfSpoke { player, .. } if *player == you)
+}
+
+fn dead_said_by(event: &PrivateEvent, you: PlayerId) -> bool {
+    matches!(event, PrivateEvent::DeadSpoke { player, .. } if *player == you)
 }
 
 fn after_last<T>(events: &[T], is_marker: impl Fn(&T) -> bool) -> &[T] {
@@ -111,6 +122,19 @@ mod tests {
         log.push(wolf_said(ME, "y"));
         assert!(new_wolf_chat(&log, ME).is_empty());
         assert_eq!(tonight(&log).len(), 2);
+    }
+
+    #[test]
+    fn dead_chat_starts_after_own_last_dead_message() {
+        let dead_said = |player, text: &str| PrivateEvent::DeadSpoke {
+            player,
+            text: text.into(),
+        };
+        let mut log = vec![dead_said(BOB, "old"), dead_said(ME, "hi")];
+        assert_eq!(new_dead_chat(&log, ME).count(), 0);
+        log.extend([wolf_said(BOB, "not dead chat"), dead_said(BOB, "new")]);
+        let new: Vec<&PrivateEvent> = new_dead_chat(&log, ME).collect();
+        assert!(matches!(new[..], [PrivateEvent::DeadSpoke { text, .. }] if text == "new"));
     }
 
     #[test]

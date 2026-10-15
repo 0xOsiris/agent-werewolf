@@ -28,6 +28,9 @@ pub enum SpectatorEvent {
         pending: Vec<PendingTurn>,
         /// The open chat window, if any.
         chat: Option<ChatState>,
+        /// The open dead chat, for dead players and spectators.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        dead_chat: Option<ChatState>,
     },
     PlayerJoined {
         player: PublicPlayer,
@@ -80,8 +83,14 @@ impl SpectatorEvent {
     }
 
     /// The event as `viewer` may see it, or `None` if it is hidden. `roles` is indexed by seat;
-    /// once the game is `over`, every role is public.
-    pub fn filtered(&self, viewer: Viewer, roles: &[Role], over: bool) -> Option<Cow<'_, Self>> {
+    /// once the game is `over`, every role is public. `dead` says the viewer had died by then.
+    pub fn filtered(
+        &self,
+        viewer: Viewer,
+        roles: &[Role],
+        over: bool,
+        dead: bool,
+    ) -> Option<Cow<'_, Self>> {
         if viewer == Viewer::Spectator {
             return Some(Cow::Borrowed(self));
         }
@@ -91,13 +100,15 @@ impl SpectatorEvent {
             | Self::Settings { .. }
             | Self::Reset => true,
             Self::Private { audience, .. } => match viewer {
-                Viewer::Player { id } => viewer.role(roles).is_some_and(|r| audience.admits(id, r)),
+                Viewer::Player { id } => viewer
+                    .role(roles)
+                    .is_some_and(|r| audience.admits(id, r, dead)),
                 Viewer::Spectator | Viewer::Audience => false,
             },
             Self::TurnStarted { player, kind, .. } | Self::TurnEnded { player, kind, .. } => {
                 viewer.sees_turn(*player, *kind, roles)
             }
-            Self::ChatWindow { kind, .. } => viewer.sees_chat(*kind, roles),
+            Self::ChatWindow { kind, .. } => viewer.sees_chat(*kind, roles, dead),
             Self::Roles { .. } if over => true,
             Self::Roles { roles: entries } if matches!(viewer, Viewer::Player { .. }) => {
                 return Some(Cow::Owned(Self::Roles {
@@ -158,9 +169,27 @@ impl Viewer {
         }
     }
 
-    /// Day discussion is public; wolf chat only shows to the pack.
-    pub fn sees_chat(self, kind: TurnKind, roles: &[Role]) -> bool {
-        self == Self::Spectator || kind != TurnKind::WolfChat || self.is_wolf(roles)
+    /// Day discussion is public; wolf chat only shows to the pack, and dead chat to the dead.
+    pub fn sees_chat(self, kind: TurnKind, roles: &[Role], dead: bool) -> bool {
+        self == Self::Spectator
+            || match kind {
+                TurnKind::WolfChat => self.is_wolf(roles),
+                TurnKind::DeadChat => dead,
+                _ => true,
+            }
+    }
+
+    /// Whether `event` announces this player's death, from which on they see the dead chat.
+    pub fn died_in(self, event: &SpectatorEvent) -> bool {
+        match (self, event) {
+            (
+                Self::Player { id },
+                SpectatorEvent::Public {
+                    event: PublicEvent::Died { player, .. },
+                },
+            ) => id == *player,
+            _ => false,
+        }
     }
 
     /// Your own role, plus the pack's if you are a wolf; everyone's once the game is over.
@@ -224,7 +253,7 @@ mod tests {
     ];
 
     fn sees(viewer: Viewer, event: &SpectatorEvent) -> bool {
-        event.filtered(viewer, &ROLES, false).is_some()
+        event.filtered(viewer, &ROLES, false, false).is_some()
     }
 
     fn private(audience: Audience) -> SpectatorEvent {
@@ -242,6 +271,10 @@ mod tests {
             Audience::Lover(lover) => PrivateEvent::InLove {
                 partner: if lover == 1 { 4 } else { 1 },
                 partner_role: Role::Villager,
+            },
+            Audience::Dead => PrivateEvent::DeadSpoke {
+                player: 4,
+                text: "boo".into(),
             },
         };
         SpectatorEvent::Private { audience, event }
@@ -351,6 +384,41 @@ mod tests {
     }
 
     #[test]
+    fn dead_chat_shows_only_to_the_dead() {
+        let window = SpectatorEvent::ChatWindow {
+            kind: TurnKind::DeadChat,
+            open: true,
+            ends_in_ms: 1,
+        };
+        let ghost = Viewer::Player { id: 2 };
+        for event in [&private(Audience::Dead), &window] {
+            assert!(event.filtered(ghost, &ROLES, false, true).is_some());
+            assert!(!sees(ghost, event), "not before they died");
+            let wolf = Viewer::Player { id: 0 };
+            assert!(
+                event.filtered(wolf, &ROLES, true, false).is_none(),
+                "nor at game over"
+            );
+            assert!(!sees(Viewer::Audience, event));
+            assert!(sees(Viewer::Spectator, event));
+        }
+        assert_eq!(
+            serde_json::to_value(private(Audience::Dead)).unwrap()["audience"],
+            "dead"
+        );
+        let died = |player| SpectatorEvent::Public {
+            event: PublicEvent::Died {
+                player,
+                role: Role::Seer,
+                cause: werewolf_protocol::DeathCause::Night,
+            },
+        };
+        assert!(ghost.died_in(&died(2)));
+        assert!(!ghost.died_in(&died(3)));
+        assert!(!Viewer::Audience.died_in(&died(2)));
+    }
+
+    #[test]
     fn roles_and_reasoning_are_filtered() {
         let roles = SpectatorEvent::Roles {
             roles: (0..)
@@ -358,7 +426,7 @@ mod tests {
                 .map(|(player, role)| RoleEntry { player, role })
                 .collect(),
         };
-        let shown = |viewer, over| match roles.filtered(viewer, &ROLES, over).as_deref() {
+        let shown = |viewer, over| match roles.filtered(viewer, &ROLES, over, false).as_deref() {
             Some(SpectatorEvent::Roles { roles }) => roles.iter().map(|r| r.player).collect(),
             _ => Vec::new(),
         };

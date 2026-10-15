@@ -62,7 +62,7 @@ pub struct ShotRecord {
     pub hit_wolf: bool,
 }
 
-/// Who may see a private event: a role, or one lover.
+/// Who may see a private event: a role, one lover, or the dead.
 #[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum Audience {
@@ -72,17 +72,20 @@ pub enum Audience {
     Cupid,
     /// Serializes as `{"lover": <seat>}`.
     Lover(PlayerId),
+    /// Players who were already dead when the event happened.
+    Dead,
 }
 
 impl Audience {
-    /// Whether `player`, dealt `role`, may see events for this audience.
-    pub(crate) fn admits(self, player: PlayerId, role: Role) -> bool {
+    /// Whether `player`, dealt `role`, may see the event; `dead` says they had died by then.
+    pub(crate) fn admits(self, player: PlayerId, role: Role, dead: bool) -> bool {
         match self {
             Self::Wolves => role == Role::Werewolf,
             Self::Seer => role == Role::Seer,
             Self::Doctor => role == Role::Doctor,
             Self::Cupid => role == Role::Cupid,
             Self::Lover(lover) => lover == player,
+            Self::Dead => dead,
         }
     }
 }
@@ -130,6 +133,8 @@ pub struct Game {
     players: Vec<PublicPlayer>,
     roles: Vec<Role>,
     died_on: Vec<Option<Phase>>,
+    /// Length of `private_log` at each player's death; they see dead chat from there on.
+    ghost_since: Vec<Option<usize>>,
     phase: Phase,
     step: Step,
     /// Number of the current night/day; night n precedes day n.
@@ -192,6 +197,7 @@ impl Game {
             players,
             roles,
             died_on: vec![None; n],
+            ghost_since: vec![None; n],
             phase: Phase::Lobby,
             step: Step::Over,
             day: 0,
@@ -269,14 +275,27 @@ impl Game {
         }
     }
 
-    /// Posts `text` to the open chat window if `player` may speak there and it isn't blank.
+    /// Dead players who may use the dead chat: during the day discussion, once two or more are dead.
+    pub fn ghosts(&self) -> Vec<PlayerId> {
+        let dead: Vec<PlayerId> = self.seats().filter(|&p| !self.is_alive(p)).collect();
+        if self.step == Step::Discussion && dead.len() >= 2 {
+            dead
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Posts `text` to the open chat window, or a ghost's to the dead chat, unless blank or barred.
     pub fn speak(&mut self, player: PlayerId, text: &str) -> Vec<GameEvent> {
-        let alive = self.living().any(|p| p == player);
-        if alive && !text.trim().is_empty() {
+        if !text.trim().is_empty() {
+            let alive = self.is_alive(player);
             let text = text.to_owned();
             match self.step {
-                Step::Discussion => self.emit_public(PublicEvent::Spoke { player, text }),
-                Step::WolfChat if self.is_wolf(player) => {
+                Step::Discussion if alive => self.emit_public(PublicEvent::Spoke { player, text }),
+                Step::Discussion if self.ghosts().contains(&player) => {
+                    self.emit_private(Audience::Dead, PrivateEvent::DeadSpoke { player, text })
+                }
+                Step::WolfChat if alive && self.is_wolf(player) => {
                     self.emit_private(Audience::Wolves, PrivateEvent::WolfSpoke { player, text })
                 }
                 _ => {}
@@ -392,6 +411,7 @@ impl Game {
     /// Everything `you` may know. `None` for an unknown seat.
     pub fn view(&self, you: PlayerId) -> Option<PlayerView> {
         let role = *self.roles.get(you as usize)?;
+        let ghost_since = self.ghost_since.get(you as usize).copied().flatten();
         let wolf_team = match role {
             Role::Werewolf => self
                 .seats()
@@ -409,8 +429,11 @@ impl Game {
             private_log: self
                 .private_log
                 .iter()
-                .filter(|(seen_by, _)| seen_by.admits(you, role))
-                .map(|(_, event)| event.clone())
+                .enumerate()
+                .filter(|(i, (seen_by, _))| {
+                    seen_by.admits(you, role, ghost_since.is_some_and(|since| *i >= since))
+                })
+                .map(|(_, (_, event))| event.clone())
                 .collect(),
         })
     }
@@ -483,7 +506,8 @@ impl Game {
                 | TurnKind::DayVote
                 | TurnKind::WolfChat
                 | TurnKind::SheriffShoot
-                | TurnKind::CupidLink => {}
+                | TurnKind::CupidLink
+                | TurnKind::DeadChat => {}
             }
         }
         let victim = leaders(&wolf_votes).choose(&mut self.rng).copied();
@@ -594,6 +618,9 @@ impl Game {
         }
         if let Some(slot) = self.died_on.get_mut(player as usize) {
             *slot = Some(when);
+        }
+        if let Some(slot) = self.ghost_since.get_mut(player as usize) {
+            *slot = Some(self.private_log.len());
         }
         self.emit_public(PublicEvent::Died {
             player,
@@ -1228,6 +1255,56 @@ mod tests {
         assert_eq!(spoken, 3);
         game.close_chat();
         assert_eq!(game.step, Step::DayVote);
+    }
+
+    #[test]
+    fn dead_chat_needs_two_ghosts_and_reaches_only_the_dead() {
+        let mut game = game(8, 8);
+        let villagers: Vec<PlayerId> = (0..8)
+            .filter(|&p| game.roles()[p as usize] == Role::Villager)
+            .collect();
+        let (first, second, late) = (villagers[0], villagers[1], villagers[2]);
+        let policy = |g: &Game, t: &TurnSpec| match t.kind {
+            TurnKind::WolfKill if g.day == 1 => target(first),
+            TurnKind::DayVote if g.day == 1 => target(second),
+            TurnKind::DayVote if g.day == 2 => target(late),
+            _ => None,
+        };
+        let discussion = |day| move |g: &Game| g.day == day && g.chat() == Some(TurnKind::DaySpeak);
+
+        play_until(&mut game, policy, discussion(1));
+        assert!(game.ghosts().is_empty(), "one ghost has nobody to talk to");
+        assert!(game.speak(first, "anyone?").is_empty());
+
+        play_until(&mut game, policy, discussion(2));
+        assert_eq!(game.ghosts(), vec![first, second]);
+        assert!(matches!(
+            &game.speak(first, "boo")[..],
+            [GameEvent::Private(Audience::Dead, PrivateEvent::DeadSpoke { player, .. })] if *player == first
+        ));
+        assert!(game.speak(second, "  ").is_empty());
+        let seer = seat_with(&game, Role::Seer);
+        assert!(matches!(
+            &game.speak(seer, "hi")[..],
+            [GameEvent::Public(PublicEvent::Spoke { .. })]
+        ));
+        for you in 0..8 {
+            let json = serde_json::to_string(&game.view(you).unwrap()).unwrap();
+            let ghost = you == first || you == second;
+            assert_eq!(json.contains("boo"), ghost, "dead chat for {you}");
+        }
+
+        play_until(&mut game, policy, |g| g.chat() == Some(TurnKind::WolfChat));
+        assert!(game.ghosts().is_empty(), "no dead chat at night");
+        play_until(&mut game, policy, discussion(3));
+        assert_eq!(game.ghosts(), vec![first, second, late]);
+        game.speak(second, "welcome");
+        let view = serde_json::to_string(&game.view(late).unwrap()).unwrap();
+        assert!(
+            !view.contains("boo"),
+            "the dead chat before your death stays hidden"
+        );
+        assert!(view.contains("welcome"));
     }
 
     #[test]

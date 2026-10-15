@@ -15,6 +15,8 @@ use crate::{
 
 /// Salts the chat jitter seed so it doesn't replay the engine's random stream.
 const CHAT_SALT: u64 = u64::from_be_bytes(*b"chatjitr");
+/// Salts the dead chat's jitter seed so it doesn't replay the living window's.
+const DEAD_CHAT_SALT: u64 = u64::from_be_bytes(*b"deadchat");
 
 pub(crate) async fn run(app: Arc<AppState>, mut game: Game, seed: u64) {
     pause(&app).await;
@@ -52,26 +54,39 @@ pub(crate) async fn run(app: Arc<AppState>, mut game: Game, seed: u64) {
     app.finish(&game);
 }
 
-/// Runs one open chat window until it times out or goes quiet. False on shutdown.
+/// Runs one chat window, plus the dead chat, until it times out or goes quiet. False on shutdown.
 async fn run_chat(app: &AppState, game: &mut Game, kind: TurnKind, seed: u64) -> bool {
     let players: Vec<PlayerId> = game.turns().iter().map(|t| t.player).collect();
+    let ghosts = if app.config().no_dead_chat {
+        Vec::new()
+    } else {
+        game.ghosts()
+    };
     let length = app.chat_length(kind);
-    let mut window = ChatWindow::open(
-        app.chat_members(&players),
-        app.chat_rules(),
-        Instant::now(),
-        length,
-        seed,
-    );
+    let (rules, now) = (app.chat_rules(), Instant::now());
+    let mut window = ChatWindow::open(app.chat_members(&players), rules, now, length, seed);
+    // Only `window` decides when to close, so the early close counts only the living.
+    let dead_seed = seed ^ DEAD_CHAT_SALT;
+    let mut dead_chat = ChatWindow::open(app.chat_members(&ghosts), rules, now, length, dead_seed);
     app.publish(SpectatorEvent::ChatWindow {
         kind,
         open: true,
         ends_in_ms: millis(length),
     });
+    if !ghosts.is_empty() {
+        app.publish(SpectatorEvent::ChatWindow {
+            kind: TurnKind::DeadChat,
+            open: true,
+            ends_in_ms: millis(length),
+        });
+    }
     loop {
         let now = Instant::now();
         for collected in app.take_answers(kind, &players) {
             post(app, game, &mut window, collected, now);
+        }
+        for collected in app.take_answers(TurnKind::DeadChat, &ghosts) {
+            post(app, game, &mut dead_chat, collected, now);
         }
         if window.should_close(now) {
             break;
@@ -80,7 +95,15 @@ async fn run_chat(app: &AppState, game: &mut Game, kind: TurnKind, seed: u64) ->
         if !due.is_empty() {
             app.issue_chat_turns(game, kind, &due, window.ends());
         }
-        if !app.wait_for_answer(window.next_wake()).await {
+        let due = dead_chat.due(now);
+        if !due.is_empty() {
+            app.issue_chat_turns(game, TurnKind::DeadChat, &due, window.ends());
+        }
+        let wake = dead_chat
+            .next_turn()
+            .into_iter()
+            .fold(window.next_wake(), Instant::min);
+        if !app.wait_for_answer(wake).await {
             return false;
         }
     }
@@ -92,6 +115,16 @@ async fn run_chat(app: &AppState, game: &mut Game, kind: TurnKind, seed: u64) ->
         open: false,
         ends_in_ms: 0,
     });
+    if !ghosts.is_empty() {
+        for collected in app.cancel_chat(TurnKind::DeadChat, &ghosts) {
+            post(app, game, &mut dead_chat, collected, Instant::now());
+        }
+        app.publish(SpectatorEvent::ChatWindow {
+            kind: TurnKind::DeadChat,
+            open: false,
+            ends_in_ms: 0,
+        });
+    }
     for event in game.close_chat() {
         app.publish(event.into());
     }

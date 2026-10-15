@@ -64,6 +64,8 @@ struct Inner {
     feed: Vec<SpectatorEvent>,
     /// The open chat window and when it ends.
     chat: Option<(TurnKind, Instant)>,
+    /// When the open dead chat ends.
+    dead_chat: Option<Instant>,
     /// Host-adjustable settings; they survive resets and apply at each start.
     settings: Settings,
     next_turn_id: u64,
@@ -88,6 +90,8 @@ pub struct Subscription {
     /// Roles by seat, for filtering the events that follow.
     pub roles: Vec<Role>,
     pub over: bool,
+    /// The viewer is a dead player, so the events that follow include the dead chat.
+    pub dead: bool,
     pub events: broadcast::Receiver<Arc<Broadcast>>,
 }
 
@@ -143,6 +147,7 @@ impl AppState {
                 roles: Vec::new(),
                 feed: Vec::new(),
                 chat: None,
+                dead_chat: None,
                 settings,
                 next_turn_id: 1,
                 next_answer_seq: 0,
@@ -306,6 +311,7 @@ impl AppState {
         inner.roles.clear();
         inner.feed.clear();
         inner.chat = None;
+        inner.dead_chat = None;
         inner.log = None;
         inner.publish(SpectatorEvent::Reset);
         drop(inner);
@@ -413,6 +419,7 @@ impl AppState {
             snapshot,
             roles: inner.roles.clone(),
             over: inner.winner.is_some(),
+            dead: inner.is_dead(viewer),
             events: inner.events.subscribe(),
         })
     }
@@ -759,7 +766,11 @@ impl Inner {
                 ends_in_ms,
             } => {
                 let ends = Instant::now() + Duration::from_millis(*ends_in_ms);
-                self.chat = open.then_some((*kind, ends));
+                if *kind == TurnKind::DeadChat {
+                    self.dead_chat = open.then_some(ends);
+                } else {
+                    self.chat = open.then_some((*kind, ends));
+                }
             }
             _ => {}
         }
@@ -799,22 +810,34 @@ impl Inner {
         }
     }
 
+    /// Whether `viewer` is a player who has died.
+    fn is_dead(&self, viewer: Viewer) -> bool {
+        matches!(viewer, Viewer::Player { id }
+            if self.seats.get(id as usize).is_some_and(|s| !s.public.alive))
+    }
+
     /// Full state as `viewer` may see it.
     fn snapshot(&self, viewer: Viewer) -> SpectatorEvent {
         let roles = &self.roles;
         let over = self.winner.is_some();
+        // Replays deaths in order, so a player sees only the dead chat from after they died.
+        let mut dead = false;
+        let events = self
+            .feed
+            .iter()
+            .filter_map(|e| {
+                dead |= viewer.died_in(e);
+                e.filtered(viewer, roles, over, dead)
+            })
+            .map(Cow::into_owned)
+            .collect();
         SpectatorEvent::Snapshot {
             phase: self.phase,
             winner: self.winner,
             settings: self.settings.body(),
             players: self.seats.iter().map(|s| s.public.clone()).collect(),
             roles: viewer.visible_roles(&role_entries(roles), roles, over),
-            events: self
-                .feed
-                .iter()
-                .filter_map(|e| e.filtered(viewer, roles, over))
-                .map(Cow::into_owned)
-                .collect(),
+            events,
             pending: self
                 .seats
                 .iter()
@@ -832,9 +855,16 @@ impl Inner {
                 .collect(),
             chat: self
                 .chat
-                .filter(|&(kind, _)| viewer.sees_chat(kind, roles))
+                .filter(|&(kind, _)| viewer.sees_chat(kind, roles, dead))
                 .map(|(kind, ends)| ChatState {
                     kind,
+                    ends_in_ms: remaining_ms(ends),
+                }),
+            dead_chat: self
+                .dead_chat
+                .filter(|_| viewer.sees_chat(TurnKind::DeadChat, roles, dead))
+                .map(|ends| ChatState {
+                    kind: TurnKind::DeadChat,
                     ends_in_ms: remaining_ms(ends),
                 }),
         }
@@ -890,7 +920,10 @@ impl Seat {
 }
 
 fn is_chat(kind: TurnKind) -> bool {
-    matches!(kind, TurnKind::DaySpeak | TurnKind::WolfChat)
+    matches!(
+        kind,
+        TurnKind::DaySpeak | TurnKind::WolfChat | TurnKind::DeadChat
+    )
 }
 
 fn role_entries(roles: &[Role]) -> Vec<RoleEntry> {

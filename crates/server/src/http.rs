@@ -217,6 +217,8 @@ struct Feed {
     /// Roles by seat, tracked from the stream itself so filtering follows event order.
     roles: Vec<Role>,
     over: bool,
+    /// The viewer has died, so they see the dead chat from here on.
+    dead: bool,
     snapshot: Option<String>,
     events: Receiver<Arc<Broadcast>>,
     closed: bool,
@@ -230,6 +232,7 @@ impl Feed {
             viewer: subscription.viewer,
             roles: subscription.roles,
             over: subscription.over,
+            dead: subscription.dead,
             snapshot: Some(subscription.snapshot),
             events: subscription.events,
             closed: false,
@@ -257,14 +260,17 @@ impl Feed {
                         SpectatorEvent::Reset => {
                             self.roles.clear();
                             self.over = false;
+                            self.dead = false;
                             // The token died with the lobby; a later player with this seat
                             // must not inherit the stream.
                             self.closed = matches!(self.viewer, Viewer::Player { .. });
                         }
                         _ => {}
                     }
+                    let event = &message.event;
+                    self.dead |= self.viewer.died_in(event);
                     let data: Arc<str> =
-                        match message.event.filtered(self.viewer, &self.roles, self.over) {
+                        match event.filtered(self.viewer, &self.roles, self.over, self.dead) {
                             None => continue,
                             Some(Cow::Borrowed(_)) => Arc::clone(&message.json),
                             Some(Cow::Owned(event)) => match serde_json::to_string(&event) {
@@ -284,6 +290,7 @@ impl Feed {
                     self.viewer = subscription.viewer;
                     self.roles = subscription.roles;
                     self.over = subscription.over;
+                    self.dead = subscription.dead;
                     self.events = subscription.events;
                     return Some((Ok(Event::default().data(subscription.snapshot)), self));
                 }

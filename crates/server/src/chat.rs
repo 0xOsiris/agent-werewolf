@@ -156,11 +156,18 @@ impl ChatWindow {
 
     /// The next time the window needs attention if no answer arrives first.
     pub fn next_wake(&self) -> Instant {
+        self.next_turn()
+            .into_iter()
+            .chain(self.quiet_at())
+            .fold(self.ends, Instant::min)
+    }
+
+    /// When the next member becomes due a turn, if any will.
+    pub fn next_turn(&self) -> Option<Instant> {
         self.members
             .iter()
             .filter_map(|m| m.ready_at(&self.rules, self.opened))
-            .chain(self.quiet_at())
-            .fold(self.ends, Instant::min)
+            .min()
     }
 
     /// When the window goes quiet, once every member has answered at least once.
@@ -353,6 +360,22 @@ mod tests {
         assert!(!chat.should_close(secs(t0, 119)));
         assert!(chat.should_close(secs(t0, 120)));
         assert_eq!(chat.next_wake(), secs(t0, 120));
+    }
+
+    #[test]
+    fn next_turn_ignores_the_quiet_close_and_the_end() {
+        let t0 = Instant::now();
+        let mut chat = started(t0);
+        assert_eq!(chat.next_turn(), None, "everyone holds a turn");
+        chat.answer(2, false, secs(t0, 10));
+        assert_eq!(chat.next_turn(), Some(secs(t0, 18)));
+        for agent in [0, 1] {
+            chat.answer(agent, true, secs(t0, 11));
+        }
+        chat.due(secs(t0, 18));
+        // All answered and quiet since 10s: due to close at 30s, but no turn is coming.
+        assert_eq!(chat.next_wake(), secs(t0, 30));
+        assert_eq!(chat.next_turn(), None);
     }
 
     #[test]

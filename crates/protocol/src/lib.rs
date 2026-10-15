@@ -115,6 +115,8 @@ pub enum TurnKind {
     SheriffShoot,
     /// Cupid's first or second Lover, on night 1. Answer with `target`; null means no Lovers.
     CupidLink,
+    /// Chat among the dead during the day discussion. Answer with `speak`; empty text passes.
+    DeadChat,
 }
 
 /// Everything this player is allowed to know.
@@ -214,6 +216,11 @@ pub enum PrivateEvent {
         partner: PlayerId,
         partner_role: Role,
     },
+    /// Dead chat; only players who were dead when it was posted see it.
+    DeadSpoke {
+        player: PlayerId,
+        text: String,
+    },
 }
 
 /// `POST /v1/act`
@@ -269,6 +276,10 @@ mod tests {
             })
             .unwrap(),
             r#"{"type":"in_love","partner":2,"partner_role":"cupid"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&TurnKind::DeadChat).unwrap(),
+            r#""dead_chat""#
         );
     }
 }

@@ -44,7 +44,7 @@ curl -s -XPOST $URL/v1/act -H "authorization: Bearer $TOKEN" -H 'content-type: a
   -d '{"turn_id": 13, "action": {"type": "target", "target": 3}}'   # null abstains
 ```
 
-`view` holds everything you are allowed to know: your role, the players, the public log, and your private log (seer results, wolf chat, Cupid's link, your Lover). `wolf_team` lists your fellow wolves, not you. Agents can be stateless.
+`view` holds everything you are allowed to know: your role, the players, the public log, and your private log (seer results, wolf chat, Cupid's link, your Lover, and once you are dead, the dead chat). `wolf_team` lists your fellow wolves, not you. Agents can be stateless.
 
 Act on a turn before polling again: `/v1/poll` returns the pending turn immediately until you answer it.
 
@@ -55,6 +55,7 @@ Act on a turn before polling again: `/v1/poll` returns the pending turn immediat
 | `day_speak` | every living player, repeatedly during the day's open chat | `speak`, at most 600 chars; empty text passes |
 | `day_vote` | every living player | `target` |
 | `wolf_chat` | living werewolves, repeatedly during the night's open chat | `speak` (only wolves see it); empty text passes |
+| `dead_chat` | dead players, repeatedly during the day's open chat once two or more are dead | `speak`, at most 600 chars (only the dead see it); empty text passes |
 | `wolf_kill` | werewolves | `target` |
 | `seer_inspect` | seer | `target` |
 | `doctor_protect` | doctor | `target` |
@@ -79,6 +80,18 @@ Talk happens in timed windows rather than in turn order: a day discussion (all l
 - The window closes when time is up, or early once nobody has posted for 20s by default and every eligible player has answered at least once.
 - Closing cancels open chat turns: poll returns `wait`, and acting on the old `turn_id` returns `409`. A closed window never counts as a timeout.
 - All the numbers above are defaults; the host can change them.
+
+### Dead chat
+
+Once two or more players are dead, the day discussion also opens a dead chat for them. There is no dead chat at night.
+
+- Every dead player gets `dead_chat` turns, with the same delays, cooldowns and caps as the day discussion: agent limits for agents, human limits for humans.
+- It opens and closes with the day discussion. It never keeps it open: the early close counts only living players.
+- Posts are `dead_spoke` events (`player`, `text`) in the private log. Dead players see the ones posted after they died. The dead learn nothing else new.
+- On a dead player's `/v1/watch`, it shows as `chat_window` events with kind `dead_chat` and `private` events with audience `dead`.
+- The living never see the dead chat, in `view` or on `/v1/watch`, and neither does `/v1/watch` without a token. Like wolf chat, it stays hidden from them after game over. Spectators see it.
+- `dead_chat` is newer than the other kinds. Agents that don't know it can leave the turn unanswered: it runs out when the window closes, which counts as silence.
+- A server started with `--no-dead-chat` never opens it.
 
 ## Rules
 

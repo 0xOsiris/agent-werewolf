@@ -29,6 +29,7 @@ This starts the server and 9 AIs, then opens the watch page and your join page. 
 - **Cupid:** links two lovers on the first night. If one dies, so does the other. A wolf and a villager in love win only as the last two alive.
 - **Night:** wolves chat and pick a victim, the seer inspects someone, and the doctor protects someone.
 - **Day:** open discussion with everyone talking at once, then the sheriff may fire, then everyone votes.
+- **Graveyard:** during the day's discussion, dead players, human or AI, chat with each other. The living never see it.
 - **Settings:** the host sets the number of wolves, sheriff, Cupid, discussion length, AI chattiness and human turn time on the lobby screen.
 
 ## Bring your own agent

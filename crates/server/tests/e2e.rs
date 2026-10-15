@@ -10,8 +10,8 @@ use serde_json::Value;
 use tokio::{net::TcpListener, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 use werewolf_protocol::{
-    ActRequest, Action, JoinRequest, JoinResponse, Phase, PlayerView, Poll, PublicEvent, Team,
-    Turn, TurnKind,
+    ActRequest, Action, JoinRequest, JoinResponse, Phase, PlayerView, Poll, PrivateEvent,
+    PublicEvent, Team, Turn, TurnKind,
 };
 use werewolf_server::Config;
 
@@ -22,6 +22,7 @@ const SILENT: u32 = 5;
 /// Markers that must only reach the right streams.
 const REASONING: &str = "REASONING-MARKER";
 const WOLF_CHAT: &str = "WOLF-CHAT-MARKER";
+const DEAD_CHAT: &str = "DEAD-CHAT-MARKER";
 
 struct Server {
     base: String,
@@ -182,7 +183,10 @@ enum Style {
 }
 
 fn is_chat(kind: TurnKind) -> bool {
-    matches!(kind, TurnKind::DaySpeak | TurnKind::WolfChat)
+    matches!(
+        kind,
+        TurnKind::DaySpeak | TurnKind::WolfChat | TurnKind::DeadChat
+    )
 }
 
 /// Other players' roles show only after death, or for a sheriff who has fired.
@@ -271,9 +275,11 @@ async fn bot(server: &Server, token: String, seed: u64, style: Style) -> Played 
                     said = 0;
                 }
                 let action = match turn.kind {
-                    TurnKind::DaySpeak | TurnKind::WolfChat if said >= 2 => Action::Speak {
-                        text: String::new(),
-                    },
+                    TurnKind::DaySpeak | TurnKind::WolfChat | TurnKind::DeadChat if said >= 2 => {
+                        Action::Speak {
+                            text: String::new(),
+                        }
+                    }
                     TurnKind::DaySpeak => {
                         said += 1;
                         Action::Speak {
@@ -284,6 +290,12 @@ async fn bot(server: &Server, token: String, seed: u64, style: Style) -> Played 
                         said += 1;
                         Action::Speak {
                             text: format!("{WOLF_CHAT}: let's eat someone"),
+                        }
+                    }
+                    TurnKind::DeadChat => {
+                        said += 1;
+                        Action::Speak {
+                            text: format!("{DEAD_CHAT}: boo"),
                         }
                     }
                     _ => {
@@ -605,8 +617,25 @@ fn is_final_roles(event: &Value) -> bool {
     event["type"] == "roles" && event["roles"].as_array().unwrap().len() == 8
 }
 
-/// Asserts `viewer` (a seat, or `None` for the audience) may see `event`; `over` reveals roles.
-fn assert_visible(viewer: Option<usize>, roles: &[String], over: bool, event: &Value) {
+/// Whether `event` is `viewer`'s death, or a snapshot that includes it.
+fn died(viewer: Option<usize>, event: &Value) -> bool {
+    match event["type"].as_str() {
+        Some("snapshot") => event["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| died(viewer, e)),
+        Some("public") => {
+            event["event"]["type"] == "died"
+                && viewer.is_some_and(|me| event["event"]["player"] == me)
+        }
+        _ => false,
+    }
+}
+
+/// Asserts `viewer` (a seat, or `None` for the audience) may see `event`; `over` reveals roles,
+/// and `dead` (the viewer has died) reveals the dead chat.
+fn assert_visible(viewer: Option<usize>, roles: &[String], over: bool, dead: bool, event: &Value) {
     let role = viewer.map(|me| roles[me].as_str());
     let wolf = role == Some("werewolf");
     let sees_turn = |turn: &Value| {
@@ -640,7 +669,11 @@ fn assert_visible(viewer: Option<usize>, roles: &[String], over: bool, event: &V
             };
             let audience = &event["audience"];
             let own = viewer.is_some_and(|me| audience["lover"] == me);
-            assert!(audience == by_role || own, "{viewer:?} saw {event}");
+            let ghost = dead && audience == "dead";
+            assert!(
+                audience == by_role || own || ghost,
+                "{viewer:?} saw {event}"
+            );
         }
         "turn_started" | "turn_ended" => {
             assert!(
@@ -650,7 +683,12 @@ fn assert_visible(viewer: Option<usize>, roles: &[String], over: bool, event: &V
             assert!(sees_turn(event), "{viewer:?} saw {event}");
         }
         "chat_window" => {
-            let allowed = event["kind"] == "day_speak" || wolf;
+            let allowed = match event["kind"].as_str().unwrap() {
+                "day_speak" => true,
+                "wolf_chat" => wolf,
+                "dead_chat" => dead,
+                _ => false,
+            };
             assert!(allowed, "{viewer:?} saw {event}");
         }
         "roles" => sees_roles(&event["roles"], over),
@@ -681,33 +719,52 @@ fn assert_visible(viewer: Option<usize>, roles: &[String], over: bool, event: &V
                 chat.is_null() || chat["kind"] == "day_speak" || wolf,
                 "{viewer:?} saw {chat}"
             );
+            let mut dead = false;
             for inner in event["events"].as_array().unwrap() {
-                assert_visible(viewer, roles, over, inner);
+                dead |= died(viewer, inner);
+                assert_visible(viewer, roles, over, dead, inner);
             }
+            let dead_chat = &event["dead_chat"];
+            assert!(dead_chat.is_null() || dead, "{viewer:?} saw {dead_chat}");
         }
         _ => {}
     }
 }
 
 fn is_chat_kind(kind: &Value) -> bool {
-    kind == "day_speak" || kind == "wolf_chat"
+    kind == "day_speak" || kind == "wolf_chat" || kind == "dead_chat"
 }
 
 /// Checks a whole stream for leaks and, for wolves, that the pack's chat arrived.
 fn assert_stream(viewer: Option<usize>, roles: &[String], events: &[Value]) {
+    assert_no_leaks(viewer, roles, events);
+    let wolf = viewer.is_some_and(|me| roles[me] == "werewolf");
+    let text = serde_json::to_string(events).unwrap();
+    assert!(
+        !wolf || text.contains(WOLF_CHAT),
+        "wolf chat missing for {viewer:?}"
+    );
+}
+
+/// Checks a whole stream for anything `viewer` may not see.
+fn assert_no_leaks(viewer: Option<usize>, roles: &[String], events: &[Value]) {
     assert_eq!(events[0]["type"], "snapshot");
-    let mut over = false;
+    let (mut over, mut dead) = (false, false);
     for event in events {
-        assert_visible(viewer, roles, over, event);
+        dead |= died(viewer, event);
+        assert_visible(viewer, roles, over, dead, event);
         over |= is_game_over(event);
     }
     let text = serde_json::to_string(events).unwrap();
     assert!(!text.contains(REASONING), "reasoning leaked to {viewer:?}");
     let wolf = viewer.is_some_and(|me| roles[me] == "werewolf");
-    assert_eq!(
-        text.contains(WOLF_CHAT),
-        wolf,
-        "wolf chat visibility for {viewer:?}"
+    assert!(
+        wolf || !text.contains(WOLF_CHAT),
+        "wolf chat leaked to {viewer:?}"
+    );
+    assert!(
+        dead || !text.contains(DEAD_CHAT),
+        "dead chat leaked to {viewer:?}"
     );
 }
 
@@ -1143,5 +1200,256 @@ async fn settings_are_lobby_only_validated_and_persistent() {
 
     let res = server.settings_put(Some(KEY), &new).await;
     assert_eq!(res.status(), StatusCode::CONFLICT, "lobby only");
+    server.stop().await;
+}
+
+/// Plays one seat of a scripted day 1: Cupid links `a` and `b`, the wolf kills `a`, so `b` dies
+/// of heartbreak. Living seats return at the vote; ghosts once the dead chat closes. A `mute`
+/// ghost holds its dead chat turn without answering.
+async fn scripted(server: &Server, token: &str, (a, b): (u32, u32), mute: bool) -> Vec<Turn> {
+    let mut turns: Vec<Turn> = Vec::new();
+    let mut posted = false;
+    loop {
+        let res = server.poll(token, 2).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let turn = match res.json::<Poll>().await.unwrap() {
+            Poll::Turn(turn) => turn,
+            Poll::Wait if turns.iter().any(|t| t.kind == TurnKind::DeadChat) => return turns,
+            Poll::Wait => continue,
+            Poll::GameOver { .. } => panic!("the game ended before day 1's vote"),
+        };
+        let (id, kind) = (turn.turn_id, turn.kind);
+        let action = match kind {
+            TurnKind::DayVote => {
+                turns.push(turn);
+                return turns;
+            }
+            TurnKind::DeadChat if mute => {
+                turns.push(turn);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+            TurnKind::DaySpeak | TurnKind::DeadChat => {
+                let text = match (posted, kind) {
+                    (true, _) => String::new(),
+                    (false, TurnKind::DeadChat) => format!("{DEAD_CHAT}: boo"),
+                    (false, _) => "Morning, village.".to_owned(),
+                };
+                posted = true;
+                Action::Speak { text }
+            }
+            TurnKind::CupidLink => Action::Target {
+                target: Some(if turn.candidates.contains(&a) { a } else { b }),
+            },
+            TurnKind::WolfKill => Action::Target { target: Some(a) },
+            _ => Action::Target { target: None },
+        };
+        turns.push(turn);
+        let res = server.act(token, id, action).await;
+        // A chat answer can race the window's close.
+        if !(is_chat(kind) && res.status() == StatusCode::CONFLICT) {
+            assert_eq!(res.status(), StatusCode::OK, "{}", error_of(res).await);
+        }
+    }
+}
+
+/// Joins six humans, which deals a wolf, seer, doctor, sheriff, Cupid and a villager.
+async fn join_six_humans(server: &Server) -> Vec<String> {
+    let mut tokens = Vec::new();
+    for i in 0..6 {
+        let res = server.join_as(&format!("p{i}"), true).await;
+        tokens.push(res.json::<JoinResponse>().await.unwrap().token);
+    }
+    tokens
+}
+
+/// Once the game starts: the roles by seat, and the two seats [`scripted`] kills on night 1.
+async fn doomed(server: &Server) -> (Vec<String>, (u32, u32)) {
+    let res = server.get(&format!("/spectate/events?key={KEY}")).await;
+    let snapshot = read_events(res, |_| true).await.remove(0);
+    let roles: Vec<String> = snapshot["roles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["role"].as_str().unwrap().to_owned())
+        .collect();
+    let mut doomed =
+        (0..).filter(|&p: &u32| !["werewolf", "doctor"].contains(&roles[p as usize].as_str()));
+    let pair = (doomed.next().unwrap(), doomed.next().unwrap());
+    (roles, pair)
+}
+
+fn is_day_vote(event: &Value) -> bool {
+    event["type"] == "turn_started" && event["kind"] == "day_vote"
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dead_chat_reaches_only_the_dead_and_never_holds_the_day_open() {
+    let dir = tempfile::tempdir().unwrap();
+    // The day closes early only if the mute ghost doesn't count toward "everyone answered".
+    let args = ["--discussion-secs=30", "--quiet-secs=1"];
+    let server = Server::start(dir.path(), &args).await;
+    let tokens = join_six_humans(&server).await;
+    let mut streams = Vec::new();
+    for token in &tokens {
+        streams.push(tokio::spawn(read_events(
+            server.watch(Some(token)).await,
+            is_day_vote,
+        )));
+    }
+    let audience = tokio::spawn(read_events(server.watch(None).await, is_day_vote));
+    let spectator = server.get(&format!("/spectate/events?key={KEY}")).await;
+    let spectator = tokio::spawn(read_timed_events(spectator, is_day_vote));
+    assert_eq!(
+        server.admin("/admin/start", Some(KEY)).await.status(),
+        StatusCode::OK
+    );
+
+    let (roles, (a, b)) = doomed(&server).await;
+    let ghost = |p: usize| p == a as usize || p == b as usize;
+
+    let bots = tokens
+        .iter()
+        .zip(0..)
+        .map(|(token, p)| scripted(&server, token, (a, b), p == b));
+    let played = tokio::time::timeout(Duration::from_secs(60), join_all(bots))
+        .await
+        .expect("day 1 should reach the vote");
+
+    let day_one = |turns: &[Turn]| -> Vec<TurnKind> {
+        turns
+            .iter()
+            .filter(|t| t.view.phase == Phase::Day { n: 1 })
+            .map(|t| t.kind)
+            .collect()
+    };
+    for (p, turns) in played.iter().enumerate() {
+        let kinds = day_one(turns);
+        if ghost(p) {
+            assert!(!kinds.is_empty(), "ghost {p} got dead chat turns");
+            assert!(
+                kinds.iter().all(|&k| k == TurnKind::DeadChat),
+                "{p}: {kinds:?}"
+            );
+        } else {
+            assert!(!kinds.contains(&TurnKind::DeadChat), "{p}: {kinds:?}");
+            let views = serde_json::to_string(&turns.iter().map(|t| &t.view).collect::<Vec<_>>());
+            assert!(
+                !views.unwrap().contains(DEAD_CHAT),
+                "dead chat in {p}'s poll view"
+            );
+        }
+    }
+    // The poster's later dead chat turns show its own message.
+    let heard = played[a as usize].iter().any(|t| {
+        t.view.private_log.iter().any(|e| {
+            matches!(e, PrivateEvent::DeadSpoke { player, text } if *player == a && text.contains(DEAD_CHAT))
+        })
+    });
+    assert!(heard, "the dead chat reached the ghost's poll view");
+
+    for (p, stream) in streams.into_iter().enumerate() {
+        let events = tokio::time::timeout(Duration::from_secs(10), stream)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_no_leaks(Some(p), &roles, &events);
+        let text = serde_json::to_string(&events).unwrap();
+        assert_eq!(
+            text.contains(DEAD_CHAT),
+            ghost(p),
+            "dead chat on {p}'s stream"
+        );
+        assert_eq!(
+            text.contains("dead_chat"),
+            ghost(p),
+            "dead chat window on {p}'s stream"
+        );
+        let late = read_events(server.watch(Some(&tokens[p])).await, |_| true).await;
+        assert_no_leaks(Some(p), &roles, &late);
+        let late = serde_json::to_string(&late).unwrap();
+        assert_eq!(
+            late.contains(DEAD_CHAT),
+            ghost(p),
+            "dead chat in {p}'s snapshot"
+        );
+    }
+    let events = tokio::time::timeout(Duration::from_secs(10), audience)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_no_leaks(None, &roles, &events);
+    let text = serde_json::to_string(&events).unwrap();
+    assert!(!text.contains(DEAD_CHAT) && !text.contains("dead_chat"));
+
+    let events = tokio::time::timeout(Duration::from_secs(10), spectator)
+        .await
+        .unwrap()
+        .unwrap();
+    let at = |kind: &str, open: bool| {
+        events
+            .iter()
+            .find(|(_, e)| e["type"] == "chat_window" && e["kind"] == kind && e["open"] == open)
+            .map(|(at, _)| *at)
+            .unwrap_or_else(|| panic!("no {kind} window open={open}"))
+    };
+    let day = at("day_speak", false) - at("day_speak", true);
+    assert!(
+        day < Duration::from_secs(10),
+        "the mute ghost held the day open: {day:?}"
+    );
+    at("dead_chat", true);
+    at("dead_chat", false);
+    let posted = events.iter().any(|(_, e)| {
+        e["audience"] == "dead" && e["event"]["type"] == "dead_spoke" && e["event"]["player"] == a
+    });
+    assert!(posted, "spectators see the dead chat");
+
+    let log = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|x| x == "jsonl"))
+        .expect("game log written");
+    assert!(
+        std::fs::read_to_string(log).unwrap().contains(DEAD_CHAT),
+        "the game log keeps the dead chat"
+    );
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn no_dead_chat_flag_keeps_the_dead_quiet() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start(dir.path(), &["--no-dead-chat"]).await;
+    let tokens = join_six_humans(&server).await;
+    let spectator = server.get(&format!("/spectate/events?key={KEY}")).await;
+    let spectator = tokio::spawn(read_events(spectator, is_day_vote));
+    assert_eq!(
+        server.admin("/admin/start", Some(KEY)).await.status(),
+        StatusCode::OK
+    );
+    let (_, (a, b)) = doomed(&server).await;
+    let (mut living, mut ghosts) = (Vec::new(), Vec::new());
+    for (token, p) in tokens.iter().zip(0..) {
+        let bot = scripted(&server, token, (a, b), false);
+        if p == a || p == b {
+            ghosts.push(bot);
+        } else {
+            living.push(bot);
+        }
+    }
+    // A ghost returns only after a dead chat turn.
+    tokio::select! {
+        played = tokio::time::timeout(Duration::from_secs(60), join_all(living)) => {
+            played.expect("day 1 should reach the vote");
+        }
+        _ = join_all(ghosts) => panic!("a ghost got a dead chat turn"),
+    }
+    let events = tokio::time::timeout(Duration::from_secs(10), spectator)
+        .await
+        .unwrap()
+        .unwrap();
+    let text = serde_json::to_string(&events).unwrap();
+    assert!(!text.contains("dead_chat") && !text.contains("dead_spoke"));
     server.stop().await;
 }

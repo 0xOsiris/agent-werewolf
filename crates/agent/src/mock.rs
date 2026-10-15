@@ -13,6 +13,9 @@ const SHERIFF_FIRE_CHANCE: f64 = 0.25;
 /// Mocks speak this often per chat window and then pass, so mock games finish fast.
 const CHAT_MESSAGES_PER_WINDOW: usize = 2;
 
+/// Chance a mock ghost speaks on each dead chat turn.
+const GHOST_CHANCE: f64 = 0.5;
+
 /// What the mock says, paired with the thought behind it, in the style the LLM prompt asks for.
 const LINES: &[(&str, &str)] = &[
     (
@@ -41,6 +44,22 @@ const LINES: &[(&str, &str)] = &[
     ),
 ];
 
+/// What a mock ghost says in the dead chat, with the thought behind it.
+const GHOST_LINES: &[(&str, &str)] = &[
+    (
+        "Watch your back, {name}.",
+        "I'm dead, but I still think {name} is in danger.",
+    ),
+    (
+        "I never trusted {name}.",
+        "From down here {name} looks even shadier.",
+    ),
+    (
+        "It's cold in the graveyard.",
+        "I'm out of the game. All that's left is gossip.",
+    ),
+];
+
 pub struct MockBrain {
     rng: StdRng,
 }
@@ -54,6 +73,10 @@ impl MockBrain {
 
     pub fn decide(&mut self, turn: &Turn) -> Decision {
         let view = &turn.view;
+        let ghost = turn.kind == TurnKind::DeadChat;
+        if ghost && !self.rng.random_bool(GHOST_CHANCE) {
+            return Decision::fallback(turn.kind);
+        }
         if is_speak(turn.kind) && chat::own_messages(view, turn.kind) >= CHAT_MESSAGES_PER_WINDOW {
             return Decision {
                 action: Action::Speak {
@@ -70,7 +93,8 @@ impl MockBrain {
                 .map(|p| p.name.as_str())
                 .collect();
             let name = others.choose(&mut self.rng).copied().unwrap_or("everyone");
-            let (line, thought) = LINES
+            let lines = if ghost { GHOST_LINES } else { LINES };
+            let (line, thought) = lines
                 .choose(&mut self.rng)
                 .copied()
                 .unwrap_or(("{name}?", "{name} worries me."));
@@ -130,11 +154,7 @@ mod tests {
         Turn {
             turn_id: 1,
             kind,
-            candidates: if kind == TurnKind::DaySpeak {
-                vec![]
-            } else {
-                vec![2, 3]
-            },
+            candidates: if is_speak(kind) { vec![] } else { vec![2, 3] },
             deadline_ms: 0,
             view: PlayerView {
                 you: 1,
@@ -232,12 +252,31 @@ mod tests {
     #[test]
     fn mock_lines_fit_the_speech_limits() {
         let longest_name = "N".repeat(MAX_NAME_LEN);
-        for (line, thought) in LINES {
+        for (line, thought) in LINES.iter().chain(GHOST_LINES) {
             let line = line.replace("{name}", &longest_name);
             assert!(line.split_whitespace().count() <= 15, "{line}");
             assert!(line.chars().count() <= MAX_SAY_LEN, "{line}");
             assert!(thought.split_whitespace().count() <= 25, "{thought}");
         }
+    }
+
+    #[test]
+    fn mock_ghosts_speak_ghost_lines_or_nothing() {
+        let mut brain = MockBrain::new(Some(9));
+        let mut ghost = turn(TurnKind::DeadChat);
+        ghost.view.players[0].alive = false;
+        let mut spoke = 0;
+        for _ in 0..300 {
+            let Action::Speak { text } = brain.decide(&ghost).action else {
+                panic!("expected speak");
+            };
+            if !text.is_empty() {
+                let ghost_line = |(line, _): &(&str, &str)| text == line.replace("{name}", "Bob");
+                assert!(GHOST_LINES.iter().any(ghost_line), "{text}");
+                spoke += 1;
+            }
+        }
+        assert!((110..=190).contains(&spoke), "spoke {spoke} of 300");
     }
 
     #[test]

@@ -47,7 +47,10 @@ pub enum ReplyError {
 }
 
 pub const fn is_speak(kind: TurnKind) -> bool {
-    matches!(kind, TurnKind::DaySpeak | TurnKind::WolfChat)
+    matches!(
+        kind,
+        TurnKind::DaySpeak | TurnKind::WolfChat | TurnKind::DeadChat
+    )
 }
 
 /// Parses `text` as the reply to `turn`, rejecting targets outside `turn.candidates`.
@@ -269,6 +272,7 @@ mod tests {
     fn fallback_is_silence_or_abstain() {
         assert_eq!(Decision::fallback(TurnKind::DaySpeak).action, speak(""));
         assert_eq!(Decision::fallback(TurnKind::WolfChat).action, speak(""));
+        assert_eq!(Decision::fallback(TurnKind::DeadChat).action, speak(""));
         for kind in [
             TurnKind::DayVote,
             TurnKind::WolfKill,
