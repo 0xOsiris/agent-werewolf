@@ -198,6 +198,9 @@ export class Feed {
         this.append(this.line("msg doctor", who + " protected " + name(ev.target), "private"), doc);
         break;
       }
+      case "error":
+        this.append(el("div", "divider death", "The staked game stopped: " + ev.message));
+        break;
       case "turn_ended":
         if (ev.timed_out && live) {
           this.append(this.line("timeout", name(ev.player) + " ran out of time (" + (KIND_LABEL[ev.kind] || ev.kind) + ")"));

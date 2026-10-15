@@ -5,6 +5,8 @@ import { Game, connectStream, phaseTitle, rulesLine } from "./events.js";
 import { Feed, el } from "./feed.js";
 import { Scene } from "./scene.js";
 import { iconCanvas } from "./sprites.js";
+import { amountText, localTime, parseStake } from "./stake.js";
+import { Wallet, httpProvider, walletMessage } from "./wallet.js";
 
 const $ = (id) => document.getElementById(id);
 const key = new URLSearchParams(location.search).get("key") || "";
@@ -37,6 +39,7 @@ function render() {
   $("lobby").hidden = !lobby;
   $("feed").hidden = lobby;
   renderSettings();
+  renderStake();
 }
 
 // ------------------------------------------------------------ host settings (lobby, key only)
@@ -135,7 +138,49 @@ async function saveSettings(patch) {
   }
 }
 
-game.on(() => render());
+game.on((ev) => {
+  if (ev.type === "reset" && stake) loadInfo();
+  render();
+});
+
+// ------------------------------------------------------------ staked games
+
+let stake = null;
+let chain = null; // { seatCount, decimals, symbol } read through stake.rpc_url, display only
+
+async function loadChain() {
+  if (!stake || !stake.rpcUrl) return;
+  const s = stake;
+  try {
+    const terms = await new Wallet(httpProvider(s.rpcUrl), s).terms();
+    if (s === stake) chain = terms;
+  } catch (err) {
+    console.warn("cannot read the game from the chain", walletMessage(err));
+  }
+  renderStake();
+}
+setInterval(() => {
+  if (stake && game.state.phase.kind === "lobby") loadChain();
+}, 15000);
+
+function renderStake() {
+  const box = $("stake-banner");
+  box.hidden = !stake;
+  if (!stake) return;
+  const item = (label, value, cls) => {
+    const span = el("span", null, label + " ");
+    span.appendChild(el("b", cls, value));
+    return span;
+  };
+  const parts = [
+    chain ? item("Pot", amountText(stake.stake * BigInt(chain.seatCount), chain)) : item("Buy-in", amountText(stake.stake, null)),
+    chain ? item("Seats", chain.seatCount + " / " + stake.maxSeats) : item("Seats", "up to " + stake.maxSeats),
+    item("Join by", localTime(stake.joinBy)),
+    item("Escrow", stake.escrow, "mono"),
+  ];
+  if (game.state.error) parts.push(el("span", "bad", "Stopped: " + game.state.error));
+  box.replaceChildren(el("b", null, "Staked game"), ...parts);
+}
 
 async function admin(path) {
   try {
@@ -159,6 +204,17 @@ async function loadInfo() {
     if (!res.ok) throw new Error("HTTP " + res.status);
     const info = await res.json();
     if (typeof info.play_url === "string") $("play-url").textContent = info.play_url;
+    stake = null;
+    chain = null;
+    if (info.stake) {
+      try {
+        stake = parseStake(info.stake);
+      } catch (err) {
+        console.warn("invalid stake terms in /v1/info", err);
+      }
+    }
+    renderStake();
+    loadChain();
   } catch (err) {
     console.warn("cannot load /v1/info", err);
     $("play-url").textContent = location.origin + "/play";

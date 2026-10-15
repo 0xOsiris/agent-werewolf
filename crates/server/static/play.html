@@ -14,6 +14,25 @@
     <div class="conn" id="conn"></div>
   </header>
 
+  <section class="card stake-card" id="stake-card" hidden>
+    <h2>Staked game</h2>
+    <dl class="stake-terms" id="stake-terms"></dl>
+    <div class="wallet-row" id="wallet-row"></div>
+    <ol class="stake-steps" id="stake-steps"></ol>
+    <div class="error" id="stake-error" role="alert"></div>
+    <div class="hint" id="stake-note"></div>
+    <div class="force-box" id="force-card" hidden>
+      <div id="force-text"></div>
+      <button type="button" id="force-send">Send move on-chain</button>
+      <div class="error" id="force-error" role="alert"></div>
+    </div>
+    <div class="payout" id="payout" hidden>
+      <div id="payout-text"></div>
+      <button type="button" id="claim" hidden>Claim</button>
+      <div class="error" id="payout-error" role="alert"></div>
+    </div>
+  </section>
+
   <section class="card join-card" id="join-card">
     <h2>Join the village</h2>
     <form id="join-form">

@@ -621,6 +621,44 @@ body.has-action .spacer-for-action { height: 50vh; }
 .roles-list .r-sheriff { color: var(--sheriff); font-weight: 800; }
 .roles-list .r-cupid { color: var(--cupid); font-weight: 800; }
 
+/* ------------------------------------------------------------ staked games */
+
+.stake-card { display: flex; flex-direction: column; gap: 10px; }
+.stake-card h2 { margin: 0; }
+.stake-terms { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 0; }
+.stake-terms[hidden] { display: none; }
+.stake-terms dt { color: var(--muted); font-weight: 800; }
+.stake-terms dd { margin: 0; }
+.wallet-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.wallet-row:empty { display: none; }
+.wallet-addr { font-family: var(--mono); font-weight: 800; }
+.stake-steps { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.stake-steps:empty { display: none; }
+.stake-steps li::before { display: inline-block; width: 1.4em; font-weight: 900; content: "○"; color: var(--muted); }
+.stake-steps .step-busy { font-weight: 800; }
+.stake-steps .step-busy::before { content: "…"; color: var(--accent); }
+.stake-steps .step-done::before { content: "✓"; color: var(--doctor); }
+.stake-steps .step-fail { color: var(--wolf); }
+.stake-steps .step-fail::before { content: "✕"; color: var(--wolf); }
+.payout { display: flex; flex-direction: column; gap: 8px; border-top: 3px dashed var(--border); padding-top: 10px; font-weight: 800; }
+.payout[hidden] { display: none; }
+.payout button { align-self: flex-start; }
+.force-box { display: flex; flex-direction: column; gap: 8px; border: 3px solid var(--sheriff); border-radius: 8px; padding: 10px 12px; font-weight: 800; }
+.force-box[hidden], .force-box button[hidden] { display: none; }
+.force-box button { align-self: flex-start; }
+.stake-banner {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  font-size: 16px;
+  color: var(--muted);
+}
+.stake-banner[hidden] { display: none; }
+.stake-banner b { color: var(--text); }
+.stake-banner .mono { font-family: var(--mono); }
+.stake-banner .bad { color: var(--wolf); font-weight: 800; }
+
 @media (min-width: 900px) {
   .play-grid { grid-template-columns: minmax(0, 1fr) 380px; align-items: start; }
   .play-grid .scene { height: max(420px, calc(100vh - 210px)); }

@@ -4,6 +4,12 @@ import { Game, connectStream, ROLE_LABEL, ROLE_GOAL, rulesLine } from "./events.
 import { Feed, el } from "./feed.js";
 import { Scene, clock } from "./scene.js";
 import { iconCanvas } from "./sprites.js";
+import {
+  STATUS, actMessage, amountText, bytesToHex, calldata, cleanText, decodeGameInfo, decodeSeats, decodeUint,
+  forcePayload, gameKey, generateSessionKey, joinMessage, localTime, logHash, parseStake, publicKeyBytes,
+  receiptMatches, sha256, shortAddr, sign,
+} from "./stake.js";
+import { NO_WALLET, Wallet, discoverWallets, httpProvider, loadItem, saveItem, walletMessage } from "./wallet.js";
 
 const $ = (id) => document.getElementById(id);
 const SESSION_KEY = "werewolf.session";
@@ -159,7 +165,7 @@ function render() {
   else if (session && s.phase.kind === "over") status = "Game over.";
   $("status-text").textContent = status;
   $("status-card").hidden = !status;
-  $("status-again").hidden = !(session && s.phase.kind === "over");
+  $("status-again").hidden = !(session && s.phase.kind === "over") || !!stake;
   $("status-card").classList.toggle("banner-dead", !!(me && !me.alive));
 
   if (!session && !rejoining) {
@@ -172,6 +178,7 @@ function render() {
   if (s.phase.kind === "over" && session && !overShown) showGameOver(s.winner);
   if (overShown) renderRoles();
   renderChat();
+  renderStake();
 }
 
 game.on((ev) => {
@@ -186,6 +193,7 @@ game.on((ev) => {
   }
   if ((ev.type === "reset" || (ev.type === "snapshot" && game.state.phase.kind === "lobby")) && wakeRejoin) wakeRejoin();
   // A reset invalidates every token; offer the join form with the name kept.
+  if (ev.type === "reset" && stake) refreshInfo();
   if (ev.type === "reset" && session && !rejoining) {
     $("name").value = session.name;
     forget("A new lobby is open. Join again!");
@@ -199,11 +207,11 @@ game.on((ev) => {
 
 // ------------------------------------------------------------ joining
 
-async function postJoin(name) {
+async function postJoin(name, stakeJoin) {
   const res = await fetch("/v1/join", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name, model: null, human: true }),
+    body: JSON.stringify({ name, model: null, human: true, ...(stakeJoin && { stake: stakeJoin }) }),
     signal: AbortSignal.timeout(10000),
   });
   const body = await res.json().catch(() => ({}));
@@ -235,6 +243,9 @@ function startSession(s) {
 function forget(message) {
   const had = !!session;
   session = null;
+  sessionKey = null;
+  receipts = [];
+  dropForce();
   store(SESSION_KEY, null);
   pollGen++;
   hideTurn();
@@ -250,11 +261,16 @@ $("join-form").addEventListener("submit", async (e) => {
   $("join-btn").disabled = true;
   $("join-error").textContent = "";
   try {
-    const { status, body } = await postJoin(name);
-    if (status === 200 && Number.isInteger(body.player_id) && typeof body.token === "string") {
-      startSession({ token: body.token, player_id: body.player_id, name });
-    } else {
-      $("join-error").textContent = (body && body.error) || "Join failed (HTTP " + status + ")";
+    await refreshInfo();
+    if (stakeProblem) $("join-error").textContent = stakeProblem;
+    else if (stake) await joinStaked(name);
+    else {
+      const { status, body } = await postJoin(name);
+      if (status === 200 && Number.isInteger(body.player_id) && typeof body.token === "string") {
+        startSession({ token: body.token, player_id: body.player_id, name });
+      } else {
+        $("join-error").textContent = (body && body.error) || "Join failed (HTTP " + status + ")";
+      }
     }
   } catch (err) {
     $("join-error").textContent = "Cannot reach the server: " + err.message;
@@ -352,6 +368,7 @@ async function pollLoop(gen) {
       });
     } else if (body.status === "turn") {
       dropChatTurn();
+      if (force && Number.isInteger(body.round) && body.round > force.round) dropForce();
       if (!turn || turn.turn_id !== body.turn_id) showTurn(body);
       else turn.deadline = performance.now() + body.deadline_ms;
       await new Promise((r) => {
@@ -361,6 +378,7 @@ async function pollLoop(gen) {
     } else if (body.status === "game_over") {
       hideTurn();
       dropChatTurn();
+      dropForce();
       showGameOver(body.winner, body.view);
       return;
     } else {
@@ -483,20 +501,23 @@ function renderChat() {
 }
 
 async function sendChat() {
-  const text = $("chat-text").value.trim();
+  const text = stake ? cleanText($("chat-text").value) : $("chat-text").value.trim();
   if (!chatTurn || chatBusy || !session || !text) return;
   const current = chatTurn;
   chatBusy = true;
   $("chat-error").textContent = "";
   renderChat();
   try {
+    const action = { type: "speak", text };
+    const signed = await signTurn(current, action);
     const res = await fetch("/v1/act", {
       method: "POST",
       headers: { authorization: "Bearer " + session.token, "content-type": "application/json" },
-      body: JSON.stringify({ turn_id: current.turn_id, action: { type: "speak", text } }),
+      body: JSON.stringify({ turn_id: current.turn_id, action, ...(signed && signed.fields) }),
       signal: AbortSignal.timeout(10000),
     });
     if (res.ok) {
+      if (signed) keepReceipt(await res.json().catch(() => null), current, signed);
       chatSent++;
       chatLastSent = performance.now();
       $("chat-text").value = "";
@@ -568,13 +589,18 @@ async function act(action) {
   setButtons();
   $("act-error").textContent = "";
   try {
+    const signed = await signTurn(current, action);
+    if (signed) armForce(current, action);
     const res = await fetch("/v1/act", {
       method: "POST",
       headers: { authorization: "Bearer " + session.token, "content-type": "application/json" },
-      body: JSON.stringify({ turn_id: current.turn_id, action }),
+      body: JSON.stringify({ turn_id: current.turn_id, action, ...(signed && signed.fields) }),
       signal: AbortSignal.timeout(10000),
     });
     if (res.ok) {
+      if (signed) {
+        keepReceipt(await res.json().catch(() => null), current, signed).then((ok) => ok && settleForce(current.turn_id));
+      }
       hideTurn();
       notice("Choice locked in.");
       return;
@@ -589,6 +615,8 @@ async function act(action) {
       notice("That turn already ended.");
       current.settle();
     } else {
+      // A 422 judges the move itself, so fix it rather than force it.
+      if (res.status === 422) settleForce(current.turn_id);
       $("act-error").textContent = (res.status === 422 ? "Not allowed: " : "Error: ") + msg;
     }
   } catch (err) {
@@ -632,9 +660,11 @@ function showGameOver(winner, view) {
   if (winner === "lovers" && pair) text += " " + game.nameOf(pair[0]) + " ♥ " + game.nameOf(pair[1]);
   else if (torn && teamOf(role) === winner) text += " Your love crossed sides, so your team's win isn't yours.";
   $("go-winner").textContent = text;
-  $("again-hint").textContent = "";
+  $("again").hidden = !!stake;
+  $("again-hint").textContent = stake ? "Close this to see your payout under Staked game." : "";
   renderRoles(view);
   $("gameover").hidden = false;
+  startPayout();
 }
 
 function renderRoles(view) {
@@ -653,9 +683,482 @@ function renderRoles(view) {
   $("go-roles").replaceChildren(...items);
 }
 
+// ------------------------------------------------------------ staked games (docs/SETTLEMENT.md)
+
+const FORCE_AFTER_MS = 5000;
+const PAYOUT_EVERY_MS = 10000;
+const PAYOUT_FOR_MS = 2 * 60 * 60 * 1000;
+const STEPS = [["approve", "Approve the buy-in"], ["seat", "Stake and take a seat"], ["http", "Join the game"]];
+const FINAL = new Set(["Settled", "Void", "Cancelled"]);
+
+let stake = null; // validated /v1/info.stake; null in free games
+let stakeProblem = "";
+let stakeAlert = "";
+let tokenInfo = null; // { seatCount, decimals, symbol } read from the chain, for display only
+let wallet = null;
+let walletStamp = "";
+let sessionKey = null;
+let keyNote = "";
+let receipts = [];
+let steps = {};
+let force = null; // { round, turnId, action, timer, shown, busy, sent, status, error }
+let payout = null; // { stake, address, until, owed, paid, timer, busy, text, error }
+
+const wallets = discoverWallets(() => queueMicrotask(render));
+const keyId = (s, address) => gameKey(s) + ":" + address;
+const money = (v) => amountText(v, tokenInfo);
+// Render runs on every game event; rewriting unchanged alert text would re-announce it.
+const setText = (id, text) => {
+  if ($(id).textContent !== text) $(id).textContent = text;
+};
+/** The game a wallet works for: the open one, or the one still paying out. */
+const walletGame = () => stake || (payout && payout.stake);
+
+/** Reads /v1/info; a staked game sets `stake`. Leaves everything as is when the server is unreachable. */
+async function refreshInfo() {
+  let info;
+  try {
+    const res = await fetch("/v1/info", { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    info = await res.json();
+  } catch (err) {
+    console.warn("cannot load /v1/info", err);
+    return;
+  }
+  let next = null;
+  stakeProblem = "";
+  if (info && info.stake) {
+    try {
+      next = parseStake(info.stake);
+    } catch (err) {
+      stakeProblem = "This server's stake terms are invalid (" + err.message + ").";
+    }
+  }
+  if (!next || !stake || gameKey(next) !== gameKey(stake)) {
+    tokenInfo = null;
+    steps = {};
+  }
+  stake = next;
+  if (stake && wallet) wallet.stake = stake;
+  if (stake) loadToken();
+  render();
+}
+const infoReady = refreshInfo();
+
+/** Seats taken and the token's decimals and symbol, via `rpc_url` or else the wallet. */
+async function loadToken() {
+  const s = stake;
+  if (!s) return;
+  const readers = [s.rpcUrl && new Wallet(httpProvider(s.rpcUrl), s), wallet].filter(Boolean);
+  for (const reader of readers) {
+    try {
+      if (reader === wallet && !(await wallet.onChain())) continue;
+      const t = await reader.terms();
+      if (s === stake) tokenInfo = t;
+      break;
+    } catch (err) {
+      console.warn("cannot read the game from the chain", walletMessage(err));
+    }
+  }
+  render();
+}
+setInterval(() => {
+  if (stake && !session && document.visibilityState === "visible") loadToken();
+}, 15000);
+
+function adopt(w) {
+  wallet = w;
+  if (typeof w.provider.on === "function") {
+    w.provider.on("accountsChanged", (accounts) => {
+      if (wallet !== w) return;
+      w.useAccounts(accounts);
+      render();
+    });
+  }
+  loadToken();
+  if (payout) {
+    clearTimeout(payout.timer);
+    checkPayout(payout);
+  }
+}
+
+async function connectWallet(provider) {
+  stakeAlert = "";
+  try {
+    const w = new Wallet(provider, walletGame());
+    await w.connect();
+    adopt(w);
+  } catch (err) {
+    stakeAlert = walletMessage(err);
+  }
+  render();
+}
+
+/** The connected wallet on the game's chain; `address` (the seat's owner) must match when given. */
+async function ensureWallet(address) {
+  if (!walletGame()) throw new Error("No staked game");
+  if (!wallet) {
+    const list = wallets();
+    if (list.length !== 1) throw new Error(list.length ? "Pick a wallet above first." : NO_WALLET);
+    const w = new Wallet(list[0].provider, walletGame());
+    await w.connect();
+    adopt(w);
+  } else {
+    await wallet.connect();
+  }
+  if (address && wallet.address !== address) {
+    throw new Error("Switch your wallet to " + shortAddr(address) + ", the account that holds your seat.");
+  }
+  return wallet;
+}
+
+/** After a reload, picks up the seat's wallet without a prompt if it is still connected. */
+async function resumeWallet(address) {
+  for (const { provider } of wallets()) {
+    const w = new Wallet(provider, stake);
+    try {
+      if ((await w.resume()) === address) return adopt(w);
+    } catch (err) {
+      console.warn("wallet resume failed", walletMessage(err));
+    }
+  }
+}
+
+/** This seat's session key from IndexedDB, or a new one. */
+async function sessionKeyFor(address) {
+  const id = keyId(stake, address);
+  const stored = await loadItem("keys", id);
+  if (stored && stored.privateKey && stored.publicKey) return stored;
+  const pair = await generateSessionKey();
+  if (!(await saveItem("keys", id, pair))) {
+    keyNote = "This browser can't store your session key: reloading the page loses your seat's signing key.";
+  }
+  return pair;
+}
+
+async function joinStaked(name) {
+  const s = stake;
+  let step = null;
+  const mark = (id, state, detail) => {
+    step = id;
+    steps[id] = { state, detail };
+    renderStake();
+  };
+  steps = {};
+  stakeAlert = "";
+  try {
+    const w = await ensureWallet();
+    const me = w.address;
+    mark("approve", "busy", "Checking the escrow…");
+    const keys = await sessionKeyFor(me);
+    const pub = bytesToHex(await publicKeyBytes(keys));
+    const seats = decodeSeats(await w.call(s.escrow, calldata.seats(s.gameId)));
+    const seat = seats.players.indexOf(me);
+    if (seat >= 0 && seats.keys[seat] !== pub) {
+      throw new Error("This wallet already holds seat " + seat + " with another session key. Join from the browser you staked in.");
+    }
+    if (seat >= 0) {
+      mark("approve", "done", "Not needed");
+      mark("seat", "done", "Seat " + seat + " is already yours");
+    } else {
+      if (Date.now() / 1000 > s.joinBy) throw new Error("Joining closed at " + localTime(s.joinBy) + ".");
+      if (seats.players.length >= s.maxSeats) throw new Error("All " + s.maxSeats + " seats are taken.");
+      const balance = decodeUint(await w.call(s.token, calldata.balanceOf(me)));
+      if (balance < s.stake) throw new Error("You have " + money(balance) + ", but the buy-in is " + money(s.stake) + ".");
+      if (decodeUint(await w.call(s.token, calldata.allowance(me, s.escrow))) < s.stake) {
+        mark("approve", "busy", "Confirm in your wallet…");
+        await w.transact(s.token, calldata.approve(s.escrow, s.stake), () => mark("approve", "busy", "Waiting for confirmation…"));
+        mark("approve", "done", "Approved " + money(s.stake));
+      } else {
+        mark("approve", "done", "Already approved");
+      }
+      mark("seat", "busy", "Confirm in your wallet…");
+      await w.transact(s.escrow, calldata.join(s.gameId, pub), () => mark("seat", "busy", "Waiting for confirmation…"));
+      mark("seat", "done", "Staked " + money(s.stake));
+    }
+    mark("http", "busy", "Joining…");
+    const signature = bytesToHex(await sign(keys.privateKey, joinMessage(s, me)));
+    const { status, body } = await postJoin(name, { address: me, session_key: pub, signature }).catch((err) => {
+      throw new Error("Cannot reach the server: " + err.message);
+    });
+    if (status !== 200 || !Number.isInteger(body.player_id) || typeof body.token !== "string") {
+      throw new Error((body && body.error) || "Join failed (HTTP " + status + ")");
+    }
+    mark("http", "done", "You're in");
+    sessionKey = keys;
+    startSession({ token: body.token, player_id: body.player_id, name, address: me });
+  } catch (err) {
+    if (step) steps[step] = { state: "fail", detail: "" };
+    stakeAlert = walletMessage(err);
+    render();
+  }
+}
+
+/** Staked games: `log_hash` and `signature` for this answer, and the act hash its receipt must name. */
+async function signTurn(t, action) {
+  await infoReady;
+  if (!stake) return null;
+  if (!session.address) throw new Error("This seat has no wallet on record; join again.");
+  sessionKey = sessionKey || (await loadItem("keys", keyId(stake, session.address))) || null;
+  if (!sessionKey) throw new Error("This browser lost your session key, so it can't sign moves");
+  if (!Number.isInteger(t.step) || !t.view) throw new Error("The server sent a turn without a step");
+  const hash = await logHash(stake, t.view.public_log);
+  const message = actMessage(stake, { turnId: t.turn_id, step: t.step, seat: session.player_id, logHash: hash, action });
+  return {
+    fields: { log_hash: bytesToHex(hash), signature: bytesToHex(await sign(sessionKey.privateKey, message)) },
+    actHash: await sha256(message),
+  };
+}
+
+/** Checks and keeps the receipt for a signed answer; false when it's missing or doesn't hold up. */
+async function keepReceipt(body, t, signed) {
+  const r = body && body.receipt;
+  if (!session) return false;
+  try {
+    if (!receiptMatches(r, { turnId: t.turn_id, seat: session.player_id, actHash: signed.actHash })) {
+      if (r) stakeAlert = "The server's receipt for turn " + t.turn_id + " doesn't match your move.";
+      return false;
+    }
+    // The escrow recomputes the digest and ecrecover checks the operator; skipped on another chain.
+    if (wallet && (await wallet.onChain()) && !(await wallet.receiptSigned(r))) {
+      stakeAlert = "The operator's receipt for turn " + t.turn_id + " has a bad signature.";
+      return false;
+    }
+    receipts.push(r);
+    saveItem("receipts", gameKey(stake) + ":" + r.turn_id + ":" + r.act_hash, r);
+    return true;
+  } catch (err) {
+    console.warn("could not check a receipt", walletMessage(err));
+    return false;
+  } finally {
+    render();
+  }
+}
+
+function armForce(t, action) {
+  dropForce();
+  if (!Number.isInteger(t.round)) return;
+  const f = { round: t.round, turnId: t.turn_id, action, shown: false, busy: false, sent: false, status: "", error: "" };
+  f.timer = setTimeout(() => offerForce(f), FORCE_AFTER_MS);
+  force = f;
+}
+
+function settleForce(turnId) {
+  if (force && force.turnId === turnId && !force.sent) dropForce();
+}
+
+function dropForce() {
+  if (!force || force.busy) return;
+  clearTimeout(force.timer);
+  force = null;
+  renderForce();
+}
+
+async function roundOpen(round) {
+  const g = decodeGameInfo(await wallet.call(stake.escrow, calldata.gameInfo(stake.gameId)));
+  return STATUS[g.status] === "Started" && g.nextRound === round;
+}
+
+async function offerForce(f) {
+  let open = true;
+  try {
+    if (wallet && (await wallet.onChain())) open = await roundOpen(f.round);
+  } catch (err) {
+    // The click checks again and shows the error; offering costs nothing.
+    console.warn("cannot check the round", walletMessage(err));
+  }
+  if (force !== f) return;
+  if (!open) return dropForce();
+  f.shown = true;
+  renderForce();
+  $("force-card").scrollIntoView({ block: "nearest", behavior: "smooth" });
+  buzz();
+}
+
+async function sendForce() {
+  const f = force;
+  if (!f || f.busy || f.sent || !session) return;
+  f.busy = true;
+  f.error = "";
+  f.status = "Checking the round…";
+  renderForce();
+  try {
+    const w = await ensureWallet(session.address);
+    if (!(await roundOpen(f.round))) throw new Error("This round has closed, so the contract won't take the move.");
+    const payload = await forcePayload(stake, { round: f.round, seat: session.player_id, action: f.action });
+    f.status = "Confirm in your wallet…";
+    renderForce();
+    await w.transact(stake.escrow, calldata.forceAction(stake.gameId, f.round, payload), () => {
+      f.status = "Waiting for confirmation…";
+      renderForce();
+    });
+    f.sent = true;
+    f.status = "Your move is on-chain. The server must use it for this round.";
+  } catch (err) {
+    f.status = "";
+    f.error = walletMessage(err);
+  } finally {
+    f.busy = false;
+    renderForce();
+  }
+}
+$("force-send").addEventListener("click", () => sendForce());
+
+function startPayout() {
+  if (!stake || !session || !session.address || payout) return;
+  payout = { stake, address: session.address, until: Date.now() + PAYOUT_FOR_MS, owed: 0n, paid: 0n, busy: false, text: "Checking your payout…", error: "" };
+  checkPayout(payout);
+}
+
+async function checkPayout(p) {
+  if (payout !== p || p.busy || p.paid) return;
+  const s = p.stake;
+  let again = true;
+  try {
+    if (!wallet) p.text = "Connect your wallet to see your payout.";
+    else if (!(await wallet.onChain())) p.text = "Switch your wallet to chain " + s.chainId + " to see your payout.";
+    else {
+      const [g, owed] = await Promise.all([
+        wallet.call(s.escrow, calldata.gameInfo(s.gameId)).then(decodeGameInfo),
+        wallet.call(s.escrow, calldata.claimable(s.gameId, p.address)).then(decodeUint),
+      ]);
+      const status = STATUS[g.status] || "Unknown";
+      p.owed = owed;
+      if (owed > 0n) {
+        p.text = "You can claim " + money(owed) + ".";
+        again = false;
+      } else if (FINAL.has(status)) {
+        p.text = "Game " + status.toLowerCase() + ". Nothing left to claim for this seat.";
+        again = false;
+      } else {
+        p.text = "Waiting for the result to settle on-chain (" + status.toLowerCase() + "). Checking every 10 s.";
+      }
+    }
+    p.error = "";
+  } catch (err) {
+    p.error = "Can't read your payout (" + walletMessage(err) + "). Retrying.";
+  }
+  if (again && Date.now() + PAYOUT_EVERY_MS > p.until) {
+    again = false;
+    p.text = "Nothing to claim after 2 hours of checking. Reload the page to check again.";
+  }
+  if (again) p.timer = setTimeout(() => checkPayout(p), PAYOUT_EVERY_MS);
+  renderPayout();
+}
+
+async function claim() {
+  const p = payout;
+  if (!p || p.busy || p.owed <= 0n) return;
+  p.busy = true;
+  p.error = "";
+  renderPayout();
+  try {
+    const w = await ensureWallet(p.address);
+    p.text = "Confirm in your wallet…";
+    renderPayout();
+    await w.transact(p.stake.escrow, calldata.claim(p.stake.gameId), () => {
+      p.text = "Waiting for confirmation…";
+      renderPayout();
+    });
+    p.paid = p.owed;
+    p.owed = 0n;
+    p.text = "Paid out " + money(p.paid) + " to " + shortAddr(p.address) + ".";
+  } catch (err) {
+    p.text = "You can claim " + money(p.owed) + ".";
+    p.error = walletMessage(err);
+  } finally {
+    p.busy = false;
+    renderPayout();
+  }
+}
+$("claim").addEventListener("click", () => claim());
+
+function renderStake() {
+  $("join-btn").textContent = stake ? "Stake & join" : "Join game";
+  const card = $("stake-card");
+  card.hidden = !stake && !stakeProblem && !payout;
+  if (card.hidden) return;
+  const joining = !!stake && !session;
+  const rows = [];
+  if (joining) {
+    const closed = Date.now() / 1000 > stake.joinBy;
+    const units = tokenInfo && Number.isInteger(tokenInfo.decimals) ? " (" + stake.stake + " base units)" : "";
+    rows.push(["Buy-in", money(stake.stake) + units]);
+    rows.push(["Seats", (tokenInfo ? tokenInfo.seatCount + " of " + stake.maxSeats + " taken" : "up to " + stake.maxSeats)
+      + ", " + stake.minSeats + " to start"]);
+    rows.push(["Join by", localTime(stake.joinBy) + (closed ? " (closed)" : "")]);
+  }
+  $("stake-terms").replaceChildren(...rows.flatMap(([k, v]) => [el("dt", null, k), el("dd", null, v)]));
+  $("stake-terms").hidden = rows.length === 0;
+  renderWallet();
+  const shown = joining && Object.keys(steps).length > 0;
+  $("stake-steps").replaceChildren(...(shown ? STEPS : []).map(([id, label]) => {
+    const st = steps[id] || { state: "todo", detail: "" };
+    return el("li", "step-" + st.state, label + (st.detail ? ": " + st.detail : ""));
+  }));
+  setText("stake-error", stakeProblem || stakeAlert);
+  const notes = [game.state.error && "The staked game stopped: " + game.state.error, keyNote];
+  if (stake && session) notes.push("Operator receipts for your moves: " + receipts.length + ".");
+  setText("stake-note", notes.filter(Boolean).join(" "));
+  renderForce();
+  renderPayout();
+}
+
+function renderWallet() {
+  const list = wallets();
+  const addr = wallet && wallet.address;
+  const seat = session && session.address;
+  const stamp = [addr, seat, !!walletGame(), ...list.map((w) => w.name)].join("|");
+  if (stamp === walletStamp) return;
+  walletStamp = stamp;
+  let nodes;
+  if (addr) {
+    const text = "Wallet " + shortAddr(addr) + (!seat ? "" : seat === addr ? " · seat " + session.player_id
+      : " · your seat is " + shortAddr(seat));
+    nodes = [el("span", "wallet-addr", text)];
+  } else if (!walletGame()) {
+    nodes = [];
+  } else if (!list.length) {
+    nodes = [el("span", "hint", NO_WALLET)];
+  } else {
+    nodes = list.map(({ name, provider }) => {
+      const b = el("button", "secondary", list.length > 1 && name ? "Connect " + name : "Connect wallet");
+      b.type = "button";
+      b.addEventListener("click", () => connectWallet(provider));
+      return b;
+    });
+  }
+  $("wallet-row").replaceChildren(...nodes);
+}
+
+function renderForce() {
+  const f = force && force.shown ? force : null;
+  $("force-card").hidden = !f;
+  if (!f) return;
+  setText("force-text", f.status
+    || "The server hasn't confirmed your move. You can send it to the escrow contract yourself; your wallet pays the gas.");
+  $("force-send").hidden = f.sent;
+  $("force-send").disabled = f.busy;
+  setText("force-error", f.error);
+}
+
+function renderPayout() {
+  const p = payout;
+  $("payout").hidden = !p;
+  if (!p) return;
+  setText("payout-text", p.text);
+  $("claim").hidden = !(p.owed > 0n);
+  $("claim").disabled = p.busy;
+  setText("claim", "Claim " + money(p.owed));
+  setText("payout-error", p.error);
+}
+
 // ------------------------------------------------------------ boot
 
 $("name").value = load(NAME_KEY) || "";
 if (session) startSession(session);
 else watch(null);
 render();
+infoReady.then(() => {
+  if (stake && session && session.address) resumeWallet(session.address);
+});

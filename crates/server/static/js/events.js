@@ -47,6 +47,8 @@ export function emptyState() {
     lovers: null,
     // This viewer's own partner when they are a lover: { partner, partner_role }.
     inLove: null,
+    // Why a staked game stopped (server `error` event), or null.
+    error: null,
   };
 }
 
@@ -174,6 +176,10 @@ export class Game {
     if (ev.type === "public") this.applyPublic(ev.event, live);
     else if (ev.type === "private") this.applyPrivate(ev.event, live);
     else if (ev.type === "reasoning") this.emit(ev, live);
+    else if (ev.type === "error") {
+      this.state.error = String(ev.message ?? "");
+      this.emit(ev, live);
+    }
   }
 
   applyPublic(ev, live) {
