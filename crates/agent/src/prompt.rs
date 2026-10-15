@@ -17,11 +17,12 @@ const RULES: &str = "\
 You are playing Werewolf, a social deduction game, against other AI players. An audience is watching live.
 
 RULES
-- Roles: werewolves (about 1 in 4 players), one seer, one doctor, maybe one sheriff, and villagers. The werewolves know each other; everyone else knows only their own role.
+- Roles: werewolves (about 1 in 4 players), one seer, one doctor, maybe one sheriff, maybe one cupid, and villagers. The werewolves know each other; everyone else knows only their own role.
 - Night: the werewolves chat privately and pick a victim. The seer learns whether one player is a werewolf. The doctor protects one player from the kill, but never the same player two nights in a row.
 - Day: the night's death is announced, everyone talks at once in an open discussion, then everyone votes. The most votes is eliminated; a tie eliminates nobody. Dead players' roles are revealed.
 - Sheriff (some games have one): once per day, after the discussion and before the vote, the sheriff may fire their only bullet of the game. A werewolf hit dies alone; anyone else hit dies and the sheriff dies too. Firing reveals the sheriff.
-- The village wins when every werewolf is dead. The werewolves win when they equal or outnumber everyone else, or if the game reaches day 10.";
+- Cupid and Lovers (some games have them): on the first night, Cupid secretly picks two Lovers, possibly including themselves. Each Lover learns the other's identity and role. If one Lover dies, the other dies of heartbreak at once.
+- The village wins when every werewolf is dead. The werewolves win when they equal or outnumber everyone else, or if the game reaches day 10. A werewolf and a non-werewolf in love win together, and only together, if they are the last two players alive.";
 
 const WEREWOLF: &str = "\
 You are a WEREWOLF. You win when the werewolves equal or outnumber everyone else.
@@ -49,6 +50,13 @@ You are the SHERIFF, on the village team. You win when every werewolf is dead.
 - You have one bullet for the whole game. If you shoot a werewolf, only they die. If you shoot anyone else, you die too.
 - Firing reveals you. Shoot only when you're fairly sure; holding fire is often right early on.
 - Until you fire, play like a villager and keep your role secret, or the wolves will kill you first.";
+
+const CUPID: &str = "\
+You are CUPID, on the village team. You win when every werewolf is dead.
+- On the first night you pick two Lovers; you may pick yourself. They learn each other's identity and role. If one dies, so does the other.
+- Picking yourself gives you one player whose role you know for sure, but ties your life to theirs.
+- Linking a werewolf with a villager turns both against everyone else: they can then only win as the last two alive.
+- After the first night you have no power. Play like a villager and keep your role and your Lovers secret.";
 
 const VILLAGER: &str = "\
 You are a VILLAGER. You win when every werewolf is dead. You have no night power; your tools are attention and your vote.
@@ -93,6 +101,7 @@ pub fn system(role: Role, persona: Option<&str>) -> String {
         Role::Seer => SEER,
         Role::Doctor => DOCTOR,
         Role::Sheriff => SHERIFF,
+        Role::Cupid => CUPID,
         Role::Villager => VILLAGER,
     };
     let mut prompt = format!("{RULES}\n\nYOUR ROLE\n{role}\n\n{STYLE}");
@@ -167,6 +176,26 @@ fn render_view(out: &mut String, names: &Names<'_>) {
         }
     }
 
+    let love = view.private_log.iter().find_map(|e| match e {
+        PrivateEvent::InLove {
+            partner,
+            partner_role,
+        } => Some((*partner, *partner_role)),
+        _ => None,
+    });
+    if let Some((partner, partner_role)) = love {
+        let _ = write!(
+            out,
+            "You are in love with {} ({}). If they die, you die. Protect them.",
+            names.get(partner),
+            role_with_article(partner_role)
+        );
+        if view.role.team() != partner_role.team() {
+            out.push_str(" Your only way to win is for you two to be the last players alive, so quietly work against everyone else.");
+        }
+        out.push('\n');
+    }
+
     out.push_str("\nPLAYERS (seat order)\n");
     for player in &view.players {
         let _ = write!(out, "- {}", names.get(player.id));
@@ -232,6 +261,7 @@ fn render_public(out: &mut String, event: &PublicEvent, names: &Names<'_>) {
                 DeathCause::Vote => "was eliminated by vote",
                 DeathCause::Shot => "was killed by the sheriff's bullet",
                 DeathCause::Backfire => "died from a misfire",
+                DeathCause::Heartbreak => "died of a broken heart",
             };
             writeln!(
                 out,
@@ -299,6 +329,21 @@ fn render_private(out: &mut String, event: &PrivateEvent, names: &Names<'_>) {
         PrivateEvent::Protected { target } => {
             writeln!(out, "- You protected {}.", names.get(*target))
         }
+        PrivateEvent::Linked { a, b } => writeln!(
+            out,
+            "- You linked {} and {} as Lovers.",
+            names.speaker(*a),
+            names.speaker(*b)
+        ),
+        PrivateEvent::InLove {
+            partner,
+            partner_role,
+        } => writeln!(
+            out,
+            "- You fell in love with {}, {}. If either of you dies, so does the other.",
+            names.get(*partner),
+            role_with_article(*partner_role)
+        ),
     };
 }
 
@@ -322,6 +367,7 @@ fn render_new_messages(out: &mut String, turn: &Turn, names: &Names<'_>) {
 }
 
 fn render_turn(out: &mut String, turn: &Turn, names: &Names<'_>) {
+    let first_lover = first_lover(turn);
     let (title, instruction) = match turn.kind {
         TurnKind::DaySpeak => (
             "open discussion",
@@ -351,8 +397,19 @@ fn render_turn(out: &mut String, turn: &Turn, names: &Names<'_>) {
             "decide whether to shoot",
             "Fire your one bullet at a player, or use null to hold fire. A werewolf dies alone; anyone else takes you down too, and firing reveals you.",
         ),
+        TurnKind::CupidLink if first_lover.is_none() => (
+            "pick your first Lover",
+            "This is the first of your two picks; you may pick yourself. Null means no Lovers this game.",
+        ),
+        TurnKind::CupidLink => (
+            "pick your second Lover",
+            "This is your second pick. The two Lovers will learn each other's identity and role. Null means no Lovers this game.",
+        ),
     };
     let _ = writeln!(out, "\nYOUR TURN: {title}\n{instruction}");
+    if let Some(first) = first_lover {
+        let _ = writeln!(out, "Your first Lover is {}.", names.get(first));
+    }
     if is_speak(turn.kind) {
         let _ = writeln!(out, "{OPEN_CHAT}");
     } else {
@@ -383,8 +440,23 @@ fn reply_format(kind: TurnKind) -> String {
         TurnKind::SheriffShoot => {
             format!(r#"{{{reasoning}, "target": <id from the candidates, or null to hold fire>}}"#)
         }
+        TurnKind::CupidLink => {
+            format!(r#"{{{reasoning}, "target": <id from the candidates, or null for no Lovers>}}"#)
+        }
         _ => format!(r#"{{{reasoning}, "target": <id from the candidates>}}"#),
     }
+}
+
+/// Cupid's first pick on the second link turn: the one living player left out of the candidates.
+fn first_lover(turn: &Turn) -> Option<PlayerId> {
+    if turn.kind != TurnKind::CupidLink {
+        return None;
+    }
+    let view = &turn.view;
+    view.players
+        .iter()
+        .find(|p| p.alive && !turn.candidates.contains(&p.id))
+        .map(|p| p.id)
 }
 
 /// Resolves ids to scrubbed display names.
@@ -445,6 +517,7 @@ const fn role_with_article(role: Role) -> &'static str {
         Role::Seer => "the Seer",
         Role::Doctor => "the Doctor",
         Role::Sheriff => "the Sheriff",
+        Role::Cupid => "Cupid",
         Role::Villager => "a Villager",
     }
 }
@@ -453,6 +526,7 @@ const fn team_label(team: Team) -> &'static str {
     match team {
         Team::Village => "the village",
         Team::Wolves => "the werewolves",
+        Team::Lovers => "the Lovers",
     }
 }
 
@@ -757,6 +831,118 @@ mod tests {
         let prompt = user(&turn(v, TurnKind::DayVote, vec![BOB]));
         assert!(prompt.contains("- Bob: alive, revealed as the Sheriff"));
         assert!(prompt.contains("- Carol: dead, was the Seer"));
+    }
+
+    #[test]
+    fn cupid_role_and_link_turns_are_rendered() {
+        let cupid = system(Role::Cupid, None);
+        assert!(cupid.contains(
+            "On the first night you pick two Lovers; you may pick yourself. They learn each other's identity and role. If one dies, so does the other."
+        ));
+        for role in [
+            Role::Werewolf,
+            Role::Seer,
+            Role::Doctor,
+            Role::Sheriff,
+            Role::Cupid,
+            Role::Villager,
+        ] {
+            let system = system(role, None);
+            assert!(
+                system.contains("Cupid and Lovers (some games have them)"),
+                "{role:?}"
+            );
+            assert!(
+                system.contains("win together, and only together"),
+                "{role:?}"
+            );
+        }
+
+        // Carol is dead, so the first pick's candidates are everyone alive, Alice included.
+        let mut v = view(ALICE, Role::Cupid, vec![]);
+        v.phase = Phase::Night { n: 1 };
+        let prompt = user(&turn(
+            v.clone(),
+            TurnKind::CupidLink,
+            vec![ALICE, BOB, DAVE],
+        ));
+        assert!(prompt.contains("You are Alice (id 101), Cupid."));
+        assert!(prompt.contains("YOUR TURN: pick your first Lover"));
+        assert!(prompt.contains("you may pick yourself. Null means no Lovers this game."));
+        assert!(!prompt.contains("Your first Lover is"));
+        assert!(prompt.contains(r#""target": <id from the candidates, or null for no Lovers>"#));
+
+        let prompt = user(&turn(v.clone(), TurnKind::CupidLink, vec![ALICE, DAVE]));
+        assert!(prompt.contains("YOUR TURN: pick your second Lover"));
+        assert!(prompt.contains("Your first Lover is Bob."));
+        assert!(prompt.contains("Null means no Lovers this game."));
+
+        v.private_log = vec![PrivateEvent::Linked { a: ALICE, b: BOB }];
+        let prompt = user(&turn(v, TurnKind::DayVote, vec![BOB]));
+        assert!(prompt.contains("- You linked Alice (you) and Bob as Lovers."));
+        assert!(!prompt.contains("You are in love"));
+    }
+
+    fn in_love(you: PlayerId, role: Role, partner: PlayerId, partner_role: Role) -> String {
+        let mut v = view(you, role, vec![]);
+        v.private_log = vec![PrivateEvent::InLove {
+            partner,
+            partner_role,
+        }];
+        user(&turn(v, TurnKind::DaySpeak, vec![]))
+    }
+
+    #[test]
+    fn lovers_learn_their_partner_and_goal() {
+        const CROSS: &str = "Your only way to win is for you two to be the last players alive, so quietly work against everyone else.";
+
+        let prompt = in_love(ALICE, Role::Villager, BOB, Role::Seer);
+        assert!(prompt.contains(
+            "You are in love with Bob (the Seer). If they die, you die. Protect them.\n"
+        ));
+        assert!(prompt.contains(
+            "- You fell in love with Bob, the Seer. If either of you dies, so does the other."
+        ));
+        assert!(!prompt.contains(CROSS), "same-team lovers keep their goal");
+
+        let prompt = in_love(BOB, Role::Werewolf, DAVE, Role::Werewolf);
+        assert!(prompt.contains("You are in love with Dave (a Werewolf)."));
+        assert!(!prompt.contains(CROSS));
+
+        let prompt = in_love(ALICE, Role::Cupid, BOB, Role::Werewolf);
+        assert!(prompt.contains(&format!(
+            "You are in love with Bob (a Werewolf). If they die, you die. Protect them. {CROSS}"
+        )));
+        let prompt = in_love(BOB, Role::Werewolf, ALICE, Role::Villager);
+        assert!(prompt.contains("You are in love with Alice (a Villager)."));
+        assert!(prompt.contains(CROSS));
+    }
+
+    #[test]
+    fn heartbreak_and_lovers_win_are_rendered() {
+        let mut v = view(ALICE, Role::Villager, vec![]);
+        v.public_log.extend([
+            PublicEvent::Died {
+                player: BOB,
+                role: Role::Werewolf,
+                cause: DeathCause::Vote,
+            },
+            PublicEvent::Died {
+                player: DAVE,
+                role: Role::Seer,
+                cause: DeathCause::Heartbreak,
+            },
+            PublicEvent::GameOver {
+                winner: Team::Lovers,
+            },
+        ]);
+        let prompt = user(&turn(v, TurnKind::DayVote, vec![]));
+        let log = public_log_section(&prompt);
+        assert!(log.contains("Dave died of a broken heart. They were the Seer."));
+        assert!(log.contains("Game over: the Lovers win."));
+        for id in [BOB, DAVE] {
+            assert!(!log.contains(&id.to_string()), "log leaks id {id}:\n{log}");
+        }
     }
 
     #[test]

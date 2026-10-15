@@ -151,9 +151,11 @@ export class Feed {
           ? name(ev.voter) + " abstained"
           : name(ev.voter) + " voted for " + name(ev.target)), ev.voter);
         break;
-      case "linked":
-        this.append(this.line("msg cupid", "Cupid linked " + name(ev.a) + " and " + name(ev.b), "private"));
+      case "linked": {
+        const who = g.holder("cupid") === this.you() ? "Your arrow linked " : "Cupid linked ";
+        this.append(this.line("msg cupid", who + name(ev.a) + " and " + name(ev.b), "private"));
         break;
+      }
       case "in_love":
         this.append(this.line("msg cupid", "You're in love with " + name(ev.partner) + " ("
           + (ROLE_LABEL[ev.partner_role] || ev.partner_role) + ")", "private"));
@@ -173,7 +175,7 @@ export class Feed {
         this.append(el("div", "divider quiet", "No one was eliminated"));
         break;
       case "game_over":
-        this.append(el("div", "divider end", ev.winner === "village" ? "Village wins!" : "Werewolves win!"));
+        this.append(el("div", "divider end", phaseTitle({ kind: "over" }, ev.winner)));
         break;
       case "wolf_spoke":
         this.append(this.bubble("wolves", ev.player, ev.text, "wolves only"), ev.player);

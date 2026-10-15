@@ -494,6 +494,7 @@ async fn validates_actions_against_the_pending_turn() {
         "--turn-timeout-secs=1",
         "--human-turn-timeout-secs=30",
         "--public-url=http://example.test:9/",
+        "--no-cupid",
     ];
     let server = Server::start(dir.path(), &args).await;
     let info: Value = server.get("/v1/info").await.json().await.unwrap();
@@ -630,13 +631,16 @@ fn assert_visible(viewer: Option<usize>, roles: &[String], over: bool, event: &V
     match event["type"].as_str().unwrap() {
         "reasoning" => panic!("reasoning leaked to {viewer:?}"),
         "private" => {
-            let allowed = match role {
+            let by_role = match role {
                 Some("werewolf") => "wolves",
                 Some("seer") => "seer",
                 Some("doctor") => "doctor",
+                Some("cupid") => "cupid",
                 _ => "nobody",
             };
-            assert_eq!(event["audience"], allowed, "{viewer:?} saw {event}");
+            let audience = &event["audience"];
+            let own = viewer.is_some_and(|me| audience["lover"] == me);
+            assert!(audience == by_role || own, "{viewer:?} saw {event}");
         }
         "turn_started" | "turn_ended" => {
             assert!(
@@ -743,12 +747,19 @@ async fn watch_streams_only_show_what_each_player_may_know() {
         .find(|p| p.to_string_lossy().ends_with("-summary.json"))
         .unwrap();
     let summary: Value = serde_json::from_slice(&std::fs::read(summary).unwrap()).unwrap();
-    let roles: Vec<String> = summary["players"]
-        .as_array()
-        .unwrap()
+    let players = summary["players"].as_array().unwrap();
+    let roles: Vec<String> = players
         .iter()
         .map(|p| p["role"].as_str().unwrap().to_owned())
         .collect();
+    // Bots always pick a target, so Cupid links two lovers.
+    assert_eq!(roles.iter().filter(|r| *r == "cupid").count(), 1);
+    assert_eq!(
+        players.iter().filter(|p| !p["lover_of"].is_null()).count(),
+        2,
+        "{summary}"
+    );
+    assert!(players.iter().any(|p| p["won"] == true), "{summary}");
 
     for (me, stream) in streams.into_iter().enumerate() {
         let events = tokio::time::timeout(Duration::from_secs(10), stream)
@@ -779,6 +790,32 @@ async fn watch_streams_only_show_what_each_player_may_know() {
                 "the sheriff gets a turn on day 1"
             );
         }
+        let private = |kind: &str| -> Vec<&Value> {
+            events
+                .iter()
+                .filter(|e| e["type"] == "private" && e["event"]["type"] == kind)
+                .map(|e| &e["event"])
+                .collect()
+        };
+        let link_turns = events
+            .iter()
+            .filter(|e| e["type"] == "turn_started" && e["kind"] == "cupid_link")
+            .count();
+        let cupid = roles[me] == "cupid";
+        assert_eq!(link_turns, if cupid { 2 } else { 0 }, "link turns for {me}");
+        assert_eq!(
+            private("linked").len(),
+            usize::from(cupid),
+            "linked for {me}"
+        );
+        let partners: Vec<&Value> = private("in_love").iter().map(|e| &e["partner"]).collect();
+        let lover_of = &summary["players"][me]["lover_of"];
+        let expected: Vec<&Value> = if lover_of.is_null() {
+            Vec::new()
+        } else {
+            vec![lover_of]
+        };
+        assert_eq!(partners, expected, "in_love for {me}");
         let start_roles = events.iter().find(|e| e["type"] == "roles").unwrap();
         let expected = if roles[me] == "werewolf" { 2 } else { 1 };
         assert_eq!(start_roles["roles"].as_array().unwrap().len(), expected);
@@ -803,6 +840,19 @@ async fn wolf_count_needs_enough_players() {
     assert!(Config::try_parse_from(["werewolf-server", "--wolves=0"]).is_err());
     let too_many = Config::parse_from(["werewolf-server", "--wolves=6"]);
     assert!(too_many.validate().is_err(), "6 wolves need 13 seats");
+    let seven = |extra: &[&str]| {
+        let args = ["werewolf-server", "--wolves=3", "--max-players=7"];
+        Config::parse_from(args.iter().chain(extra)).validate()
+    };
+    assert!(
+        seven(&[]).is_err(),
+        "3 wolves + sheriff + cupid need 8 seats"
+    );
+    assert!(seven(&["--no-cupid"]).is_ok());
+    assert!(
+        seven(&["--no-cupid", "--cupid"]).is_err(),
+        "the last flag wins"
+    );
 
     let dir = tempfile::tempdir().unwrap();
     let server = Server::start(dir.path(), &["--wolves=3", "--auto-start=5"]).await;
@@ -814,9 +864,10 @@ async fn wolf_count_needs_enough_players() {
     assert_eq!(res.status(), StatusCode::CONFLICT);
     assert_eq!(
         error_of(res).await,
-        "need at least 7 players for 3 wolves + sheriff"
+        "need at least 8 players for 3 wolves + sheriff + cupid"
     );
     server.join_ok("p6").await;
+    server.join_ok("p7").await;
     assert_eq!(server.join("late").await.status(), StatusCode::CONFLICT);
     server.stop().await;
 }
@@ -834,7 +885,7 @@ fn read_summary(dir: &Path) -> Value {
 #[tokio::test(flavor = "multi_thread")]
 async fn closing_a_chat_window_cancels_turns_without_timeouts() {
     let dir = tempfile::tempdir().unwrap();
-    let args = ["--turn-timeout-secs=5", "--discussion-secs=1"];
+    let args = ["--turn-timeout-secs=5", "--discussion-secs=1", "--no-cupid"];
     let server = Server::start(dir.path(), &args).await;
     let mut tokens = Vec::new();
     for i in 0..5 {
@@ -871,6 +922,7 @@ async fn chat_messages_skip_the_pace() {
         "--pace-ms=1000",
         "--turn-timeout-secs=10",
         "--discussion-secs=3",
+        "--no-cupid",
     ];
     let server = Server::start(dir.path(), &args).await;
     let mut tokens = Vec::new();
@@ -985,6 +1037,7 @@ async fn settings_are_lobby_only_validated_and_persistent() {
     let new = serde_json::json!({
         "wolves": 2,
         "sheriff": false,
+        "cupid": false,
         "discussion_secs": 30,
         "ai_chat_cooldown_secs": 1,
         "ai_max_chat_messages": 2,
@@ -1001,6 +1054,7 @@ async fn settings_are_lobby_only_validated_and_persistent() {
     );
     let initial: Value = server.settings_get(Some(KEY)).await.json().await.unwrap();
     assert_eq!(initial["sheriff"], true);
+    assert_eq!(initial["cupid"], true);
     assert_eq!(initial["wolves"], Value::Null);
 
     // Everyone may see settings: spectators, players, and the audience.
@@ -1036,13 +1090,15 @@ async fn settings_are_lobby_only_validated_and_persistent() {
         assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{field}");
         assert!(error_of(res).await.contains(field));
     }
-    let mut partial = new.clone();
-    partial.as_object_mut().unwrap().remove("sheriff");
-    assert_eq!(
-        server.settings_put(Some(KEY), &partial).await.status(),
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "PUT needs the full object"
-    );
+    for field in ["sheriff", "cupid"] {
+        let mut partial = new.clone();
+        partial.as_object_mut().unwrap().remove(field);
+        assert_eq!(
+            server.settings_put(Some(KEY), &partial).await.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "PUT needs the full object, including {field}"
+        );
+    }
 
     let res = server.settings_put(Some(KEY), &new).await;
     assert_eq!(res.status(), StatusCode::OK);
@@ -1083,6 +1139,7 @@ async fn settings_are_lobby_only_validated_and_persistent() {
         .collect();
     assert_eq!(roles.iter().filter(|&&r| r == "werewolf").count(), 2);
     assert!(!roles.contains(&"sheriff"));
+    assert!(!roles.contains(&"cupid"));
 
     let res = server.settings_put(Some(KEY), &new).await;
     assert_eq!(res.status(), StatusCode::CONFLICT, "lobby only");

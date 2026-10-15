@@ -274,7 +274,10 @@ mod tests {
         assert!(sees(villager, &private(Audience::Lover(4))));
         assert!(sees(wolf, &private(Audience::Lover(1))));
         assert!(!sees(villager, &private(Audience::Lover(1))));
-        assert!(!sees(Viewer::Player { id: 0 }, &private(Audience::Lover(1))));
+        assert!(!sees(
+            Viewer::Player { id: 0 },
+            &private(Audience::Lover(1))
+        ));
         assert!(!sees(cupid, &private(Audience::Lover(4))));
         for audience in [
             Audience::Wolves,
@@ -318,7 +321,10 @@ mod tests {
         assert!(!sees(villager, &turn(0, TurnKind::WolfChat)));
         assert!(!sees(Viewer::Audience, &turn(3, TurnKind::DoctorProtect)));
         assert!(sees(Viewer::Audience, &turn(3, TurnKind::DayVote)));
-        assert!(sees(Viewer::Player { id: 5 }, &turn(5, TurnKind::CupidLink)));
+        assert!(sees(
+            Viewer::Player { id: 5 },
+            &turn(5, TurnKind::CupidLink)
+        ));
         assert!(sees(Viewer::Spectator, &turn(5, TurnKind::CupidLink)));
         for viewer in [wolf, villager, Viewer::Audience] {
             assert!(!sees(viewer, &turn(5, TurnKind::CupidLink)));
@@ -360,7 +366,10 @@ mod tests {
         assert_eq!(shown(Viewer::Player { id: 2 }, false), vec![2]);
         assert_eq!(shown(Viewer::Audience, false), Vec::<PlayerId>::new());
         assert_eq!(shown(Viewer::Audience, true), vec![0, 1, 2, 3, 4, 5]);
-        assert_eq!(shown(Viewer::Player { id: 4 }, true), vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(
+            shown(Viewer::Player { id: 4 }, true),
+            vec![0, 1, 2, 3, 4, 5]
+        );
         let reasoning = SpectatorEvent::Reasoning {
             player: 0,
             kind: TurnKind::WolfChat,

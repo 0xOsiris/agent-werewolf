@@ -23,6 +23,12 @@ if ((HUMANS < 0 || total < 5 || total > 12)); then
   echo "need HUMANS >= 0 and AIS + HUMANS between 5 and 12 (got $AIS + $HUMANS)" >&2
   exit 1
 fi
+# Sheriff and Cupid are on by default; the server refuses to start a game too small for them.
+need=$((2 * WOLVES + 1 > WOLVES + 5 ? 2 * WOLVES + 1 : WOLVES + 5))
+if ((total < need)); then
+  echo "warning: $WOLVES wolves + sheriff + Cupid need $need players (have $total)." >&2
+  echo "         Turn off sheriff or Cupid in the lobby settings, or set WOLVES=1." >&2
+fi
 mock=0
 if [ -z "${OPENROUTER_API_KEY:-}" ]; then
   mock=1

@@ -15,6 +15,8 @@
   --doctor-tint: rgba(61, 220, 151, 0.16);
   --sheriff: #e8b04a;
   --sheriff-tint: rgba(232, 176, 74, 0.16);
+  --cupid: #ff77a8;
+  --cupid-tint: rgba(255, 119, 168, 0.16);
   --villager: #c9cde0;
   --death: #ff8a65;
   --ink: #1a1c2c;
@@ -47,6 +49,8 @@ body.day {
   --doctor-tint: rgba(15, 138, 95, 0.10);
   --sheriff: #9a6a12;
   --sheriff-tint: rgba(154, 106, 18, 0.12);
+  --cupid: #c2185b;
+  --cupid-tint: rgba(194, 24, 91, 0.10);
   --villager: #4a4f63;
   --death: #c0392b;
   --think-bg: rgba(106, 43, 217, 0.09);
@@ -118,6 +122,7 @@ canvas.pixel, .pixel { image-rendering: pixelated; image-rendering: crisp-edges;
 .nt-role.role-seer { color: #cfa8ff; }
 .nt-role.role-doctor { color: #6ff0b5; }
 .nt-role.role-sheriff { color: #ffd27a; }
+.nt-role.role-cupid { color: #ffa8c8; }
 .nt-role.role-villager { color: #e0e4f2; }
 
 .bubble-stack {
@@ -181,6 +186,7 @@ canvas.pixel, .pixel { image-rendering: pixelated; image-rendering: crisp-edges;
 .thought.role-seer { --think-role: #6a2bd9; }
 .thought.role-doctor { --think-role: #0f8a5f; }
 .thought.role-sheriff { --think-role: #9a6a12; }
+.thought.role-cupid { --think-role: #c2185b; }
 .thought-head {
   font-size: 0.72em; font-weight: 900; letter-spacing: 0.06em; text-transform: uppercase; color: var(--think-role);
 }
@@ -248,7 +254,39 @@ canvas.pixel, .pixel { image-rendering: pixelated; image-rendering: crisp-edges;
 }
 @keyframes pop-toast { from { opacity: 0; transform: translateY(-8px); } }
 .toast.death { border-color: var(--death); }
+.toast.love { border-color: #ff77a8; color: #ffd0e2; }
 .toast.fade { opacity: 0; }
+.lovers-win {
+  position: absolute;
+  left: 50%;
+  top: 40%;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: calc(var(--vp) * 3px);
+  padding: calc(var(--vp) * 3px) calc(var(--vp) * 5px);
+  background: rgba(26, 28, 44, 0.84);
+  border: 3px solid #ff77a8;
+  border-radius: 8px;
+  box-shadow: 0 4px 0 rgba(0, 0, 0, 0.4);
+  color: #fff;
+  text-align: center;
+  pointer-events: none;
+  animation: pop-toast 0.4s ease-out;
+}
+.lw-lover { display: flex; flex-direction: column; align-items: center; min-width: 0; max-width: calc(var(--vp) * 40px); }
+.lw-lover canvas { width: calc(var(--vp) * 26px); height: auto; image-rendering: pixelated; }
+.lw-name {
+  font-weight: 800;
+  font-size: clamp(12px, calc(var(--vp) * 4px), 28px);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lw-heart canvas { width: calc(var(--vp) * 16px); height: auto; image-rendering: pixelated; animation: beat 0.9s ease-in-out infinite; }
+@keyframes beat { 50% { transform: scale(1.18); } }
 .hit {
   position: absolute;
   pointer-events: auto;
@@ -300,6 +338,9 @@ canvas.pixel, .pixel { image-rendering: pixelated; image-rendering: crisp-edges;
 .doctor .tag { color: var(--doctor); }
 .sheriff { background: var(--sheriff-tint); border-left-color: var(--sheriff); }
 .sheriff .tag { color: var(--sheriff); }
+.cupid { background: var(--cupid-tint); border-left-color: var(--cupid); }
+.cupid .tag { color: var(--cupid); }
+.lover-mark { color: var(--cupid); font-size: 0.95em; line-height: 1; }
 .line { padding: 2px 14px; color: var(--muted); }
 .line.msg { color: var(--text); padding: 8px 14px; }
 .line.timeout { font-style: italic; }
@@ -333,6 +374,7 @@ canvas.pixel, .pixel { image-rendering: pixelated; image-rendering: crisp-edges;
 .role-tag.role-seer { background: var(--seer); }
 .role-tag.role-doctor { background: var(--doctor); }
 .role-tag.role-sheriff { background: var(--sheriff); }
+.role-tag.role-cupid { background: var(--cupid); }
 .act {
   display: grid;
   gap: 6px;
@@ -345,6 +387,7 @@ canvas.pixel, .pixel { image-rendering: pixelated; image-rendering: crisp-edges;
 .act.seer { background: var(--seer-tint); border-left-color: var(--seer); }
 .act.doctor { background: var(--doctor-tint); border-left-color: var(--doctor); }
 .act.sheriff { background: var(--sheriff-tint); border-left-color: var(--sheriff); }
+.act.cupid { background: var(--cupid-tint); border-left-color: var(--cupid); }
 .act-row { display: grid; grid-template-columns: 4.8em minmax(0, 1fr); gap: 8px; align-items: start; }
 .act-label {
   display: flex;
@@ -403,7 +446,7 @@ body.spectator { height: 100vh; display: flex; flex-direction: column; overflow:
 .lobby-card { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 12px; padding: 8px 6px 16px 0; overflow-y: auto; }
 .lobby-card[hidden] { display: none; }
 .lobby-card h2 { margin: 0; font-family: var(--mono); font-size: 30px; line-height: 1.15; text-transform: uppercase; color: var(--accent); }
-.qr-frame { background: #fff; padding: 14px; border: 4px solid var(--ink); border-radius: 8px; box-shadow: 0 5px 0 var(--ink); width: min(100%, 420px); }
+.qr-frame { background: #fff; padding: 14px; border: 4px solid var(--ink); border-radius: 8px; box-shadow: 0 5px 0 var(--ink); width: min(100%, 420px, 38vh); }
 .qr-frame img { display: block; width: 100%; height: auto; image-rendering: pixelated; }
 .play-url { font-family: var(--mono); font-size: 20px; font-weight: 800; }
 .lobby-hint { color: var(--muted); font-size: 17px; }
@@ -485,8 +528,11 @@ textarea { resize: vertical; min-height: 96px; }
 .role-card.role-seer .role-name { color: var(--seer); }
 .role-card.role-doctor .role-name { color: var(--doctor); }
 .role-card.role-sheriff .role-name { color: var(--sheriff); }
+.role-card.role-cupid .role-name { color: var(--cupid); }
 .role-card p { margin: 2px 0 0; }
 .role-card .pack { margin-top: 4px; font-weight: 800; color: var(--wolf); }
+.role-card .pack:empty, .role-card .love:empty { display: none; }
+.role-card .love { margin-top: 4px; font-weight: 800; color: var(--cupid); }
 .banner-dead { background: var(--wolf-tint); border-color: var(--wolf); font-weight: 800; }
 .status-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .status-card[hidden], .status-card button[hidden] { display: none; }
@@ -539,6 +585,8 @@ textarea { resize: vertical; min-height: 96px; }
 .action.shoot h3 { color: var(--sheriff); }
 .action.shoot #act-help { color: var(--wolf); font-weight: 800; }
 .action.shoot #act-confirm { background: var(--wolf); color: #ffffff; }
+.action.cupid h3 { color: var(--cupid); }
+.action.cupid #act-confirm { background: var(--cupid); color: #ffffff; }
 .chat-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .chat-head span { font-weight: 800; white-space: nowrap; }
 .action.chat.wolf h3 { color: var(--wolf); }
@@ -571,6 +619,7 @@ body.has-action .spacer-for-action { height: 50vh; }
 .roles-list li { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px dashed var(--border); padding: 2px 0; }
 .roles-list .r-werewolf { color: var(--wolf); font-weight: 800; }
 .roles-list .r-sheriff { color: var(--sheriff); font-weight: 800; }
+.roles-list .r-cupid { color: var(--cupid); font-weight: 800; }
 
 @media (min-width: 900px) {
   .play-grid { grid-template-columns: minmax(0, 1fr) 380px; align-items: start; }

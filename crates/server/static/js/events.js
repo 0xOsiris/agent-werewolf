@@ -98,6 +98,21 @@ export class Game {
     return id === undefined ? undefined : Number(id);
   }
 
+  /**
+   * The Lovers this viewer knows, as [a, b]: Cupid's link, `me` and my partner, or the last
+   * two standing after a Lovers win. Null otherwise.
+   */
+  lovers(me) {
+    const s = this.state;
+    if (s.lovers) return s.lovers;
+    if (s.inLove && me !== null) return [me, s.inLove.partner];
+    if (s.winner === "lovers") {
+      const alive = s.players.filter((p) => p.alive).map((p) => p.id);
+      if (alive.length === 2) return alive;
+    }
+    return null;
+  }
+
   /** Applies one SpectatorEvent JSON object from the server. */
   handle(ev) {
     const s = this.state;

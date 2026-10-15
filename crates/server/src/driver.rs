@@ -156,6 +156,7 @@ fn actor(event: &GameEvent, turns: &[TurnSpec]) -> Option<PlayerId> {
         | GameEvent::Private(_, PrivateEvent::WolfSpoke { player, .. }) => Some(*player),
         GameEvent::Public(PublicEvent::Voted { voter, .. })
         | GameEvent::Private(_, PrivateEvent::WolfVoted { voter, .. }) => Some(*voter),
+        GameEvent::Public(PublicEvent::Shot { sheriff, .. }) => Some(*sheriff),
         GameEvent::Private(_, PrivateEvent::Inspected { .. }) => holder(TurnKind::SeerInspect),
         GameEvent::Private(_, PrivateEvent::Protected { .. }) => holder(TurnKind::DoctorProtect),
         GameEvent::Private(_, PrivateEvent::Linked { .. }) => holder(TurnKind::CupidLink),
@@ -167,5 +168,35 @@ async fn pause(app: &AppState) {
     let pace = app.config().pace_ms;
     if pace > 0 {
         tokio::time::sleep(Duration::from_millis(pace)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::Audience;
+
+    #[test]
+    fn reasoning_follows_the_event_its_actor_caused() {
+        let turns = [TurnSpec {
+            player: 4,
+            kind: TurnKind::CupidLink,
+            candidates: vec![1, 2],
+        }];
+        let shot = GameEvent::Public(PublicEvent::Shot {
+            sheriff: 3,
+            target: 1,
+        });
+        assert_eq!(
+            actor(&shot, &turns),
+            Some(3),
+            "a firing sheriff is not holding fire"
+        );
+        let linked = GameEvent::Private(Audience::Cupid, PrivateEvent::Linked { a: 1, b: 2 });
+        assert_eq!(actor(&linked, &turns), Some(4));
+        assert_eq!(
+            actor(&GameEvent::Public(PublicEvent::PeacefulNight), &turns),
+            None
+        );
     }
 }

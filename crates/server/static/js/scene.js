@@ -554,6 +554,7 @@ export class Scene {
         this.banner = { text: this.bannerText(), at: -1e9 };
         this.overAt = this.game.state.phase.kind === "over" ? now - 5000 : null;
         for (const a of this.actors.values()) a.form = this.wantsWolf(a.id) ? "wolf" : "human";
+        this.showLoversWin();
         return;
       case "reset":
         for (const a of this.actors.values()) {
@@ -565,12 +566,15 @@ export class Scene {
         this.clearTransient();
         this.banner = { text: "Lobby", at: now };
         this.overAt = null;
+        this.showLoversWin();
         return;
       case "player_joined":
         this.sync(live);
         return;
       case "roles":
         this.sync(false);
+        // Game-over roles name the lovers' roles on the win card.
+        if (this.loversCard) this.showLoversWin();
         return;
     }
     if (!live) return;
@@ -603,7 +607,15 @@ export class Scene {
       case "linked": {
         // Cupid's arrow flies from Cupid (if known) to the first lover, then on to the second.
         const cupid = this.game.holder("cupid");
-        this.effects.push({ type: "cupid", id: cupid ?? ev.a, a: ev.a, b: ev.b, start: now, dur: 1500 });
+        this.effects.push({ type: "cupid", id: cupid ?? ev.a, a: ev.a, b: ev.b, start: this.afterBanner(now), dur: 1600 });
+        break;
+      }
+      case "in_love": {
+        // A lover's own stream has no `linked`: the arrow drops out of the sky onto the pair.
+        const me = this.you();
+        if (!this.game.state.lovers && me !== null) {
+          this.effects.push({ type: "cupid", id: me, sky: true, a: me, b: ev.partner, start: this.afterBanner(now), dur: 1600 });
+        }
         break;
       }
       case "shot":
@@ -658,9 +670,11 @@ export class Scene {
         this.fadeArrows("day", 1500);
         break;
       case "game_over":
+        for (const a of this.actors.values()) this.retireStack(a, now);
         this.overAt = now;
         this.banner = { text: this.bannerText(), at: now };
         this.sync(false);
+        this.showLoversWin();
         break;
       case "inspected":
         this.effects.push({ type: "inspect", id: ev.target, wolf: ev.is_werewolf, start: now, dur: 3200 });
@@ -669,6 +683,11 @@ export class Scene {
         this.effects.push({ type: "shield", id: ev.target, start: now, dur: 2600 });
         break;
     }
+  }
+
+  /** `now`, or when the big phase banner leaves the middle of the stage if it is still up. */
+  afterBanner(now) {
+    return Math.max(now, this.banner.at + 1700);
   }
 
   clearTransient() {
@@ -928,6 +947,8 @@ export class Scene {
     for (const a of order) this.drawActorHud(a, t, this.game.player(a.id));
     this.drawEffects(t);
     this.drawBanner(t);
+    const top = Math.round(this.topAt * this.vp) + "px";
+    if (this.top.style.top !== top) this.top.style.top = top;
     this.placeDom(players);
     if (this.showChat) this.renderChatBar();
   }
@@ -1151,7 +1172,7 @@ export class Scene {
         const img = SPRITES.brokenHeart;
         const half = Math.floor(img.width / 2);
         const gap = Math.round(clamp((k - 0.25) / 0.5, 0, 1) * 4);
-        const top = Math.max(y - 38 - Math.round(k * 4), 5 + 10 * this.bannerScale);
+        const top = this.labelTop(a, y - 38 - Math.round(k * 4));
         ctx.globalAlpha = k > 0.8 ? (1 - k) / 0.2 : 1;
         ctx.drawImage(img, 0, 0, half, img.height, x - half - gap, top + gap, half, img.height);
         ctx.drawImage(img, half, 0, img.width - half, img.height, x + gap, top, img.width - half, img.height);
@@ -1159,7 +1180,7 @@ export class Scene {
       } else if (e.type === "misfire") {
         ctx.globalAlpha = k > 0.8 ? (1 - k) / 0.2 : 1;
         const txt = pixelText("MISFIRE!", "#ff8a3d");
-        const top = Math.max(y - 40 - Math.round(k * 6), 5 + 10 * this.bannerScale);
+        const top = this.labelTop(a, y - 40 - Math.round(k * 6));
         ctx.drawImage(txt, clamp(x - Math.round(txt.width / 2), 1, this.W - txt.width - 1), top);
         ctx.globalAlpha = 1;
       } else if (e.type === "slash") {
@@ -1182,8 +1203,7 @@ export class Scene {
         ctx.globalAlpha = 1;
       } else if (e.type === "inspect") {
         ctx.globalAlpha = k > 0.85 ? (1 - k) / 0.15 : 1;
-        // Keep the verdict below the phase banner for back-row targets.
-        const top = Math.max(y - 50, 5 + 10 * this.bannerScale);
+        const top = this.labelTop(a, y - 50);
         const ball = ICONS.seer;
         ctx.drawImage(ball, x - 5, top + 10);
         const txt = pixelText(e.wolf ? "WOLF!" : "NOT WOLF", e.wolf ? "#ff4d5e" : "#3ddc97");
@@ -1193,74 +1213,130 @@ export class Scene {
     }
   }
 
-  /** The lovers' pair this viewer may know: Cupid's link, or "me and my partner". */
-  loversPair() {
+  /** The "Lovers win!" card over the clearing: both lovers' portraits with a heart between. */
+  showLoversWin() {
+    if (this.loversCard) this.loversCard.remove();
+    this.loversCard = null;
     const s = this.game.state;
-    if (s.lovers) return s.lovers;
-    const me = this.you();
-    return s.inLove && me !== null ? [me, s.inLove.partner] : null;
+    const pair = s.phase.kind === "over" && s.winner === "lovers" ? this.game.lovers(this.you()) : null;
+    if (!pair) return;
+    const card = el("div", "lovers-win");
+    const portrait = (id) => {
+      const box = el("div", "lw-lover");
+      const a = this.actors.get(id);
+      const role = s.roles[id];
+      if (a) box.appendChild(copyCanvas(role === "werewolf" ? a.sprites.wolf : a.sprites.idle));
+      box.appendChild(el("div", "lw-name", this.game.nameOf(id)));
+      if (role) box.appendChild(el("div", "nt-role role-" + role, ROLE_LABEL[role] || role));
+      return box;
+    };
+    const heart = el("div", "lw-heart");
+    heart.appendChild(copyCanvas(SPRITES.loveHeart));
+    card.append(portrait(pair[0]), heart, portrait(pair[1]));
+    this.stage.appendChild(card);
+    this.loversCard = card;
   }
 
-  /** A pulsing pink dotted link with a heart between living lovers. */
+  /**
+   * Top of a ~10px label that wants to sit at `want` above actor `a`: pushed below the phase
+   * banner and any toasts so back-row labels stay readable. When even the actor's chest is under
+   * the toasts (back row on phones), it goes under their name tag instead.
+   */
+  labelTop(a, want) {
+    const y = Math.round(a.y);
+    // `topAt` is just under the banner that is up, the big game-over one included.
+    let floor = (this.topAt ?? 8 + 10 * this.bannerScale) - 3;
+    if (this.top.offsetHeight && (this.toasts.childElementCount || !this.chatBar.hidden)) {
+      floor = Math.max(floor, (this.top.offsetTop + this.top.offsetHeight) / this.vp + 1);
+    }
+    if (want >= floor) return Math.round(want);
+    if (floor <= y - 14) return Math.round(floor);
+    return Math.round(Math.min(y + 3 + a.label.offsetHeight / this.vp, this.H - 11));
+  }
+
+  /** A pulsing pink dotted link with a heart between living lovers; it fades as one dies. */
   drawLovers(t) {
-    const pair = this.loversPair();
+    const pair = this.game.lovers(this.you());
     if (!pair) return;
     const [a, b] = pair.map((id) => this.actors.get(id));
     const [pa, pb] = pair.map((id) => this.game.player(id));
-    if (!a || !b || !pa || !pb || !pa.alive || !pb.alive) return;
+    if (!a || !b || !pa || !pb) return;
+    const now = performance.now();
     // Wait for Cupid's arrow to land before the link appears.
-    if (this.effects.some((e) => e.type === "cupid" && performance.now() - e.start < 1100)) return;
+    if (this.effects.some((e) => e.type === "cupid" && now - e.start < 1300)) return;
+    let fade = 1;
+    if (!pa.alive || !pb.alive) {
+      const broken = this.effects.find((e) => e.type === "heartbreak" && pair.includes(e.id));
+      if (!broken) return;
+      fade = clamp(1 - (now - broken.start) / 900, 0, 1);
+      if (fade <= 0) return;
+    }
     const ctx = this.ctx;
     const x0 = Math.round(a.x);
     const y0 = Math.round(a.y - 12);
     const x1 = Math.round(b.x);
     const y1 = Math.round(b.y - 12);
-    const n = Math.max(1, Math.round(Math.hypot(x1 - x0, y1 - y0) / 3));
-    const pulse = 0.55 + 0.35 * Math.sin(t * 0.006);
-    ctx.globalAlpha = pulse;
-    ctx.fillStyle = "#ff77a8";
-    const shift = Math.floor(t / 120) % 3;
-    for (let i = 0; i < n; i++) {
-      if ((i + shift) % 3 === 2) continue;
-      ctx.fillRect(Math.round(x0 + ((x1 - x0) * i) / n), Math.round(y0 + ((y1 - y0) * i) / n), 1, 1);
+    // 2px dashes flow from a to b, over a dark shadow so they read on grass and at night.
+    const len = Math.hypot(x1 - x0, y1 - y0);
+    const beat = t % 900 < 140;
+    ctx.globalAlpha = (beat ? 1 : 0.8) * fade;
+    for (let d = (t / 80) % 5; d < len; d += 5) {
+      const px = Math.round(x0 + ((x1 - x0) * d) / len);
+      const py = Math.round(y0 + ((y1 - y0) * d) / len);
+      ctx.fillStyle = DARK;
+      ctx.fillRect(px, py + 1, 2, 2);
+      ctx.fillStyle = beat ? "#ffb3d1" : "#ff77a8";
+      ctx.fillRect(px, py, 2, 2);
     }
-    ctx.globalAlpha = 1;
-    const heart = SPRITES.loveHeart;
+    ctx.globalAlpha = fade;
+    const heart = beat ? SPRITES.loveHeartBig : SPRITES.loveHeart;
     const bob = Math.round(Math.sin(t * 0.006) * 1.5);
     ctx.drawImage(heart, Math.round((x0 + x1) / 2 - heart.width / 2), Math.round((y0 + y1) / 2 - heart.height / 2) + bob);
+    ctx.globalAlpha = 1;
   }
 
-  /** Cupid's arrow: from Cupid to the first lover, then on to the second, with heart sparks. */
+  /**
+   * Cupid's arrow: a gold shaft with a heart tip, lobbed from Cupid (or, for a lover who doesn't
+   * know Cupid, out of the sky) to the first lover, then on to the second, trailing sparkles.
+   */
   drawCupidArrow(e, a, now) {
     const la = this.actors.get(e.a);
     const lb = this.actors.get(e.b);
     if (!la || !lb) return;
     const ms = now - e.start;
-    const legs = [[a, la, 0, 500], [la, lb, 550, 1050]];
+    const from = e.sky ? { x: (la.x + lb.x) / 2, y: 14 } : a;
+    const legs = [[from, la, 0, 600], [la, lb, 650, 1250]];
     const ctx = this.ctx;
-    for (const [from, to, t0, t1] of legs) {
-      if (ms < t0 || ms > t1 + 450) continue;
+    for (const [src, dst, t0, t1] of legs) {
+      if (ms < t0 || ms > t1 + 300) continue;
       const p = clamp((ms - t0) / (t1 - t0), 0, 1);
-      const x0 = from.x;
-      const y0 = from.y - 14;
-      const x1 = to.x;
-      const y1 = to.y - 12;
+      const x0 = src.x;
+      const y0 = src.y - 14;
+      const x1 = dst.x;
+      const y1 = dst.y - 12;
       // A gentle arc so the arrow reads as lobbed rather than fired.
-      const hx = x0 + (x1 - x0) * p;
-      const hy = y0 + (y1 - y0) * p - Math.sin(p * Math.PI) * 10;
-      const back = Math.max(0, p - 0.12);
-      const tx = x0 + (x1 - x0) * back;
-      const ty = y0 + (y1 - y0) * back - Math.sin(back * Math.PI) * 10;
+      const lift = Math.min(24, Math.hypot(x1 - x0, y1 - y0) * 0.25);
+      const at = (q) => ({ x: x0 + (x1 - x0) * q, y: y0 + (y1 - y0) * q - Math.sin(q * Math.PI) * lift });
       if (p < 1) {
-        ctx.fillStyle = "#c08040";
-        pixLine(ctx, tx, ty, hx, hy);
-        ctx.fillStyle = "#ff77a8";
-        ctx.fillRect(Math.round(tx) - 1, Math.round(ty) - 1, 2, 2);
+        const head = at(p);
+        const prev = at(Math.max(0, p - 0.02));
+        const d = Math.hypot(head.x - prev.x, head.y - prev.y) || 1;
+        const ux = (head.x - prev.x) / d;
+        const uy = (head.y - prev.y) / d;
+        const tx = head.x - ux * 11;
+        const ty = head.y - uy * 11;
+        ctx.fillStyle = DARK;
+        pixLine(ctx, tx, ty + 1, head.x, head.y + 1, 2);
+        ctx.fillStyle = "#ffd23f";
+        pixLine(ctx, tx, ty, head.x, head.y, 2);
         ctx.fillStyle = "#ffffff";
-        ctx.fillRect(Math.round(hx), Math.round(hy), 1, 1);
+        for (const side of [1, -1]) pixLine(ctx, tx, ty, tx - ux * 3 - uy * 3 * side, ty - uy * 3 + ux * 3 * side);
+        const tip = SPRITES.loveHeart;
+        ctx.drawImage(tip, Math.round(head.x - tip.width / 2), Math.round(head.y - tip.height / 2));
+        if (Math.random() < 0.7) this.particles.push(spark(tx, ty, Math.random() < 0.5 ? "#ff77a8" : "#ffe0ee"));
       } else if (!e["hit" + t0]) {
         e["hit" + t0] = true;
-        this.puff(Math.round(x1), Math.round(y1), 12, ["#ff77a8", "#ffb3d1", "#ffffff"]);
+        this.puff(Math.round(x1), Math.round(y1), 16, ["#ff77a8", "#ffb3d1", "#ffffff"]);
       }
     }
   }
@@ -1371,10 +1447,13 @@ export class Scene {
     const fit = (want) => Math.max(1, Math.min(want, Math.floor((this.W - 6) / img.width)));
     const age = now - this.banner.at;
     const small = this.bannerScale;
+    // Toasts sit just under whichever banner is up, so they never cover the result.
+    this.topAt = 8 + 10 * small;
     if (over) {
       const sc = fit(Math.round(small * 2.5));
       const k = clamp(age / 500, 0, 1);
       const y = Math.round(this.H * 0.05 - (1 - k) * 20);
+      this.topAt = Math.max(this.topAt, Math.round(this.H * 0.05) + img.height * sc + 2);
       ctx.globalAlpha = k;
       ctx.drawImage(img, Math.round((this.W - img.width * sc) / 2), y, img.width * sc, img.height * sc);
       ctx.globalAlpha = 1;
@@ -1454,6 +1533,16 @@ function setPos(node, x, y) {
   node.dataset.pos = v;
   node.style.left = Math.round(x) + "px";
   node.style.top = Math.round(y) + "px";
+}
+
+/** A same-size copy of a sprite canvas, for DOM use; CSS scales it up crisply. */
+function copyCanvas(src) {
+  const c = document.createElement("canvas");
+  c.width = src.width;
+  c.height = src.height;
+  c.getContext("2d").drawImage(src, 0, 0);
+  c.className = "pixel";
+  return c;
 }
 
 function spark(x, y, color) {

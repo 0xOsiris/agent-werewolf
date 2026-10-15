@@ -27,9 +27,10 @@ function render() {
   const alive = s.players.filter((p) => p.alive).length;
   const humans = s.players.filter((p) => p.human).length;
   const rules = rulesLine(s.settings);
-  $("subtitle").textContent = ph === "lobby"
+  const count = ph === "lobby"
     ? s.players.length + " joined" + (humans ? " · " + humans + " human" + (humans === 1 ? "" : "s") : "")
-    : alive + " of " + s.players.length + " alive" + (rules ? " · " + rules : "");
+    : alive + " of " + s.players.length + " alive";
+  $("subtitle").textContent = count + (rules ? " · " + rules : "");
   $("start").disabled = ph !== "lobby";
   $("reset").disabled = ph !== "lobby" && ph !== "over";
   const lobby = ph === "lobby";
@@ -43,6 +44,7 @@ function render() {
 const PRESETS = [
   { label: "Werewolves", options: [["Auto", { wolves: null }], ["1", { wolves: 1 }], ["2", { wolves: 2 }], ["3", { wolves: 3 }]] },
   { label: "Sheriff", options: [["On", { sheriff: true }], ["Off", { sheriff: false }]] },
+  { label: "Cupid", options: [["On", { cupid: true }], ["Off", { cupid: false }]] },
   { label: "Discussion", options: [["1 min", { discussion_secs: 60 }], ["2 min", { discussion_secs: 120 }], ["3 min", { discussion_secs: 180 }]] },
   {
     label: "AI chattiness",
@@ -68,7 +70,9 @@ function renderSettings() {
   const stamp = JSON.stringify(s.settings) + editable;
   if (stamp === settingsKey) return;
   settingsKey = stamp;
-  const rows = PRESETS.map((row) => {
+  // A server without a field would reject it (unknown fields are refused), so hide its row.
+  const known = PRESETS.filter((row) => Object.keys(row.options[0][1]).every((k) => k in s.settings));
+  const rows = known.map((row) => {
     const line = el("div", "set-row");
     line.appendChild(el("span", "set-label", row.label));
     const group = el("div", "seg");
@@ -91,9 +95,14 @@ function renderSettings() {
   $("set-rows").replaceChildren(...rows);
 }
 
-function setSettingsStatus(text, bad) {
+let statusTimer = null;
+
+/** `fade` clears the text after a moment; errors stay until the next click. */
+function setSettingsStatus(text, bad, fade) {
   $("set-status").textContent = text;
   $("set-status").classList.toggle("bad", !!bad);
+  clearTimeout(statusTimer);
+  if (fade) statusTimer = setTimeout(() => ($("set-status").textContent = ""), 2500);
 }
 
 async function saveSettings(patch) {
@@ -114,7 +123,7 @@ async function saveSettings(patch) {
       // The settings event follows on the stream; apply the reply now so the click feels instant.
       if (body && typeof body === "object" && "sheriff" in body) game.state.settings = body;
       else game.state.settings = { ...current, ...patch };
-      setSettingsStatus("Saved", false);
+      setSettingsStatus("Saved", false, true);
     } else {
       setSettingsStatus("Not saved: " + ((body && body.error) || "HTTP " + res.status), true);
     }

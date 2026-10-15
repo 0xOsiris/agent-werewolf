@@ -111,7 +111,9 @@ pub struct Answer {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Step {
     /// Cupid picks a Lover on night 1; `first` holds the first pick while the second is due.
-    CupidLink { first: Option<PlayerId> },
+    CupidLink {
+        first: Option<PlayerId>,
+    },
     /// Open chat among living wolves.
     WolfChat,
     NightActions,
@@ -860,7 +862,9 @@ mod tests {
     }
 
     fn sheriff_game(n: usize, seed: u64) -> Game {
-        Game::new(roster(n), setup(None, true, false), seed).unwrap().0
+        Game::new(roster(n), setup(None, true, false), seed)
+            .unwrap()
+            .0
     }
 
     /// Plays silently until the sheriff's turn, returning the sheriff's seat.
@@ -1341,7 +1345,10 @@ mod tests {
 
     /// Answers Cupid's two turns, linking `a` and `b`.
     fn link(game: &mut Game, a: PlayerId, b: PlayerId) -> Vec<GameEvent> {
-        assert!(step(game, |_, _| target(a)).is_empty(), "the first pick is secret");
+        assert!(
+            step(game, |_, _| target(a)).is_empty(),
+            "the first pick is secret"
+        );
         let events = step(game, |_, _| target(b));
         assert_eq!(game.lover_of(a), Some(b));
         events
@@ -1657,7 +1664,11 @@ mod tests {
         });
         assert_eq!(game.winner(), Some(Team::Wolves));
         assert!(game.is_alive(wolves[0]) && game.is_alive(villager));
-        assert_eq!(game.living().count(), 4, "the wolf lover counts toward parity");
+        assert_eq!(
+            game.living().count(),
+            4,
+            "the wolf lover counts toward parity"
+        );
         for p in 0..8 {
             assert_eq!(game.won(p), p == wolves[1], "seat {p}");
         }

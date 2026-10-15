@@ -83,10 +83,11 @@ impl MockBrain {
                 ),
             };
         }
-        let hold = if turn.kind == TurnKind::SheriffShoot {
-            1.0 - SHERIFF_FIRE_CHANCE
-        } else {
-            0.1
+        let hold = match turn.kind {
+            TurnKind::SheriffShoot => 1.0 - SHERIFF_FIRE_CHANCE,
+            // Always link, so mock games exercise the Lovers.
+            TurnKind::CupidLink => 0.0,
+            _ => 0.1,
         };
         let target = if self.rng.random_bool(hold) {
             None
@@ -94,6 +95,9 @@ impl MockBrain {
             turn.candidates.choose(&mut self.rng).copied()
         };
         let thought = match target.and_then(|id| view.players.iter().find(|p| p.id == id)) {
+            Some(player) if turn.kind == TurnKind::CupidLink => {
+                format!("{} looks lonely. I'll make them a Lover.", player.name)
+            }
             Some(player) => format!(
                 "Something about {} feels off. I'm going with my gut.",
                 player.name
@@ -251,5 +255,25 @@ mod tests {
             }
         }
         assert!((180..=320).contains(&fired), "fired {fired} of 1000");
+    }
+
+    #[test]
+    fn mock_cupid_always_picks_a_candidate() {
+        let mut brain = MockBrain::new(Some(5));
+        let link = turn(TurnKind::CupidLink);
+        let mut picked = Vec::new();
+        for _ in 0..200 {
+            let decision = brain.decide(&link);
+            let Action::Target { target: Some(t) } = decision.action else {
+                panic!("mock cupid passed: {decision:?}");
+            };
+            assert!(link.candidates.contains(&t));
+            assert!(decision.reasoning.unwrap().contains("Lover"));
+            picked.push(t);
+        }
+        assert!(
+            picked.contains(&2) && picked.contains(&3),
+            "picks are random"
+        );
     }
 }

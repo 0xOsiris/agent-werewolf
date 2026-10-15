@@ -272,6 +272,8 @@ function buildShared() {
     { h: "#ff4d6d", w: "#ffd0da" });
   SPRITES.loveHeart = buildSprite([grid(["1.2h.2h1.", "hw5h", "7h", "1.5h1.", "2.3h2.", "3.h3."], 7, 6)],
     { h: "#ff77a8", w: "#ffe0ee" }, "#7a1f4a");
+  SPRITES.loveHeartBig = buildSprite([grid(["1.3h1.3h1.", "2hw6h", "hw7h", "9h", "1.7h1.", "2.5h2.", "3.3h3.", "4.h4."], 9, 8)],
+    { h: "#ff77a8", w: "#ffe0ee" }, "#7a1f4a");
   SPRITES.brokenHeart = buildSprite([grid(["1.2h3.2h1.", "4h.4h", "3h.5h", "1.3h.3h1.", "2.2h.2h2.", "3.h.h3."], 9, 6)],
     { h: "#ff77a8" }, "#7a1f4a");
   SPRITES.you = buildSprite([grid(["7y", "1.5y1.", "2.3y2.", "3.y3."], 7, 4)], { y: "#ffd23f" });
@@ -303,8 +305,10 @@ function buildShared() {
   ICONS.sheriff = buildSprite([grid(["5.y5.", "4.3y4.", "4.3y4.", "11y", "1.9y1.", "2.3yY3y2.", "2.7y2.",
     "2.7y2.", "1.3y3.3y1.", "1.2y5.2y1.", "y9.y"], 11, 11)],
   { y: "#ffd23f", Y: "#b8860b" });
-  ICONS.cupid = buildSprite([grid(["2.3h.3h2.", "1.9h1.", "1.9h1.", "3a5h3a", "2.7h2.", "3.5h3.", "4.3h4.", "5.h5."], 11, 8)],
-    { h: "#ff77a8", a: "#ffd23f" });
+  // A bow with a heart-tipped arrow nocked on its string.
+  ICONS.cupid = buildSprite([grid(["..bbs........", ".b..s........", ".b..s..hh.hh.", "b...s.hwhhhhh", "b.f.s.hhhhhhh",
+    "b.aaaaahhhhh.", "b.f.s...hhh..", "b...s....h...", ".b..s........", ".b..s........", "..bbs........"], 13, 11)],
+  { b: "#c08040", s: "#f2e9dc", a: "#ffd23f", f: "#ffffff", h: "#ff77a8", w: "#ffe0ee" });
   ICONS.villager = buildSprite([grid(["m2.m2.m", "m2.m2.m", "m2.m2.m", "7m", "3.w3.", "3.w3.", "3.w3.",
     "3.w3.", "3.w3.", "3.w3.", "3.w3."], 7, 11)],
   { m: "#d6dae8", w: "#c08040" });

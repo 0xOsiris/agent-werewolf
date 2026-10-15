@@ -65,8 +65,6 @@ let chatSent = 0;
 let chatLastSent = 0;
 let chatBuzzed = false;
 let chatBusy = false;
-// Cupid answers two link turns in a row; the second picks the other lover.
-let cupidPicks = 0;
 
 const game = new Game();
 const you = () => (session ? session.player_id : null);
@@ -135,7 +133,7 @@ function render() {
       card.dataset.role = role;
       $("role-icon").replaceChildren(iconCanvas(role, 5));
     }
-    $("role-name").textContent = "You are the " + (ROLE_LABEL[role] || role);
+    $("role-name").textContent = role === "cupid" ? "You are Cupid" : "You are the " + (ROLE_LABEL[role] || role);
     $("role-goal").textContent = ROLE_GOAL[role] || "";
     const pack = role === "werewolf"
       ? Object.keys(s.roles).map(Number).filter((id) => id !== session.player_id && s.roles[id] === "werewolf")
@@ -214,16 +212,14 @@ async function postJoin(name) {
 
 /** My partner's id if I'm one of the lovers, else null. */
 function lovePartner() {
-  const s = game.state;
   if (!session) return null;
-  if (s.inLove) return s.inLove.partner;
   const me = session.player_id;
-  if (s.lovers && s.lovers.includes(me)) return s.lovers[0] === me ? s.lovers[1] : s.lovers[0];
-  return null;
+  const pair = game.lovers(me);
+  if (!pair || !pair.includes(me)) return null;
+  return pair[0] === me ? pair[1] : pair[0];
 }
 
 function startSession(s) {
-  cupidPicks = 0;
   session = s;
   store(SESSION_KEY, s);
   store(NAME_KEY, s.name);
@@ -378,24 +374,33 @@ function showTurn(t) {
   turn = { ...t, deadline: performance.now() + t.deadline_ms, settle: () => {} };
   selected = null;
   let [title, help] = TURN_TEXT[t.kind] || [t.kind, ""];
-  if (t.kind === "cupid_link" && cupidPicks > 0) title = "Choose the second lover";
+  const players = t.view && t.view.players ? t.view.players : game.state.players;
+  if (t.kind === "cupid_link") {
+    // The second link turn offers every living player but the first pick.
+    const first = players.find((p) => p.alive && !t.candidates.includes(p.id));
+    if (first) {
+      title = "Choose the second lover";
+      help = "First lover: " + (first.id === you() ? "you" : first.name) + ". Who do they fall for?";
+    }
+  }
   $("act-title").textContent = title;
   $("act-help").textContent = help;
   $("act-error").textContent = "";
-  const names = new Map((t.view && t.view.players ? t.view.players : game.state.players).map((p) => [p.id, p]));
+  const names = new Map(players.map((p) => [p.id, p]));
   const buttons = t.candidates.map((id) => {
     const p = names.get(id);
     const b = el("button");
     b.type = "button";
     b.dataset.id = String(id);
     b.appendChild(document.createTextNode(p ? p.name : "#" + id));
-    b.appendChild(el("span", "c-model", p ? (p.human ? "human" : p.model || "agent") : ""));
+    b.appendChild(el("span", "c-model", !p ? "" : id === you() ? "you" : p.human ? "human" : p.model || "agent"));
     b.addEventListener("click", () => pick(id));
     return b;
   });
   $("act-cands").replaceChildren(...buttons);
   const shoot = t.kind === "sheriff_shoot";
   $("action").classList.toggle("shoot", shoot);
+  $("action").classList.toggle("cupid", t.kind === "cupid_link");
   $("act-abstain").textContent = shoot ? "Hold fire" : t.kind === "wolf_kill" ? "Spare everyone"
     : t.kind === "cupid_link" ? "No lovers" : "Abstain";
   scene.setPicking(t.candidates, null);
@@ -539,8 +544,9 @@ function pick(id) {
 function updateSelection() {
   for (const b of $("act-cands").children) b.classList.toggle("selected", Number(b.dataset.id) === selected);
   $("act-confirm").disabled = selected === null || busy;
-  const verb = turn && turn.kind === "sheriff_shoot" ? "Fire" : "Confirm";
-  $("act-confirm").textContent = selected === null ? verb : verb + (verb === "Fire" ? " at " : " ") + game.nameOf(selected);
+  const verb = { sheriff_shoot: "Fire at", cupid_link: "Pick" }[turn && turn.kind] || "Confirm";
+  $("act-confirm").textContent = selected === null ? verb.replace(" at", "")
+    : verb + " " + game.nameOf(selected);
   if (turn) scene.setPicking(turn.candidates, selected);
 }
 
@@ -569,7 +575,6 @@ async function act(action) {
       signal: AbortSignal.timeout(10000),
     });
     if (res.ok) {
-      if (current.kind === "cupid_link") cupidPicks = action.target === null ? 2 : cupidPicks + 1;
       hideTurn();
       notice("Choice locked in.");
       return;
@@ -605,16 +610,28 @@ $("act-abstain").addEventListener("click", () => act({ type: "target", target: n
 
 // ------------------------------------------------------------ game over
 
+const teamOf = (role) => (role === "werewolf" ? "wolves" : "village");
+
 function showGameOver(winner, view) {
   if (!winner) return;
   overShown = true;
   const role = (view && view.role) || (session && game.state.roles[session.player_id]);
-  const team = role === "werewolf" ? "wolves" : "village";
-  const won = role ? team === winner : null;
+  const partner = lovePartner();
+  const partnerRole = partner === null ? null
+    : game.state.roles[partner] || (view && view.players.find((p) => p.id === partner)?.revealed_role);
+  // Lovers from opposite teams only ever win together, as "lovers".
+  const torn = !!(role && partnerRole && teamOf(role) !== teamOf(partnerRole));
+  const won = !role ? null : winner === "lovers" ? partner !== null : teamOf(role) === winner && !torn;
   const res = $("go-result");
   res.textContent = won === null ? "Game over" : won ? "You won!" : "You lost";
   res.className = "result" + (won === null ? "" : won ? " win" : " lose");
-  $("go-winner").textContent = winner === "village" ? "The village wins!" : "The werewolves win!";
+  // The poll's game_over can beat the stream's; then the view says who is still standing.
+  const standing = view ? view.players.filter((p) => p.alive).map((p) => p.id) : [];
+  const pair = game.lovers(you()) || (winner === "lovers" && standing.length === 2 ? standing : null);
+  let text = { village: "The village wins!", wolves: "The werewolves win!", lovers: "The lovers win!" }[winner] || "Game over";
+  if (winner === "lovers" && pair) text += " " + game.nameOf(pair[0]) + " ♥ " + game.nameOf(pair[1]);
+  else if (torn && teamOf(role) === winner) text += " Your love crossed sides, so your team's win isn't yours.";
+  $("go-winner").textContent = text;
   $("again-hint").textContent = "";
   renderRoles(view);
   $("gameover").hidden = false;
@@ -623,9 +640,12 @@ function showGameOver(winner, view) {
 function renderRoles(view) {
   const roles = { ...game.state.roles };
   if (view) for (const p of view.players) if (p.revealed_role) roles[p.id] = p.revealed_role;
+  const lovers = game.lovers(you());
   const items = game.state.players.map((p) => {
     const li = el("li");
-    li.appendChild(el("span", null, p.name + (p.id === you() ? " (you)" : "")));
+    const who = el("span", null, p.name + (p.id === you() ? " (you)" : ""));
+    if (lovers && lovers.includes(p.id)) who.appendChild(el("span", "lover-mark", " ♥"));
+    li.appendChild(who);
     const r = roles[p.id];
     li.appendChild(el("span", r ? "r-" + r : "", r ? ROLE_LABEL[r] || r : "?"));
     return li;
