@@ -1,0 +1,27 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.30"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+remappings = [
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+    "forge-std/=lib/forge-std/src/",
+]
+fs_permissions = [
+    { access = "read", path = "../crates/verify/tests/vectors.json" },
+    { access = "read", path = "../crates/verify/tests/transcript.json" },
+]
+
+[fuzz]
+runs = 512
+
+[fmt]
+line_length = 100
+
+[lint]
+# Deadlines are minutes long; a few seconds of validator skew doesn't matter.
+exclude_lints = ["block-timestamp"]
+ignore = ["test/**/*.sol", "script/**/*.sol"]
