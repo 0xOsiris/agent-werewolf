@@ -58,7 +58,8 @@ pub fn parse(text: &str, turn: &Turn) -> Result<Decision, ReplyError> {
     let key = if is_speak(turn.kind) { "say" } else { "target" };
     let object = extract_object(text, key).ok_or(ReplyError::NoJson(key))?;
     let reasoning = object
-        .get("reasoning")
+        .get("aside")
+        .or_else(|| object.get("reasoning"))
         .and_then(Value::as_str)
         .and_then(|r| clean_text(r, MAX_REASONING_LEN));
 
@@ -196,6 +197,15 @@ mod tests {
 
     fn speak(text: &str) -> Action {
         Action::Speak { text: text.into() }
+    }
+
+    #[test]
+    fn reads_aside_and_still_accepts_reasoning() {
+        let speak = turn(TurnKind::DaySpeak, vec![]);
+        let aside = parse(r#"{"aside": "a", "reasoning": "r", "say": "hi"}"#, &speak).unwrap();
+        assert_eq!(aside.reasoning.as_deref(), Some("a"));
+        let legacy = parse(r#"{"reasoning": "r", "say": "hi"}"#, &speak).unwrap();
+        assert_eq!(legacy.reasoning.as_deref(), Some("r"));
     }
 
     #[test]

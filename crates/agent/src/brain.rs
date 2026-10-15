@@ -77,7 +77,13 @@ impl LlmBrain {
                 } else {
                     warn!(error_class = class, error = %err, "no usable LLM decision; sending fallback action");
                 }
-                Decision::fallback(turn.kind)
+                // Spectators see reasoning, so a failing model shows up on stage instead of going quiet.
+                Decision {
+                    reasoning: Some(format!(
+                        "My model failed ({class}), so I'm sitting this turn out."
+                    )),
+                    ..Decision::fallback(turn.kind)
+                }
             }
         }
     }
@@ -236,7 +242,7 @@ mod tests {
         let decision = brain(&url, Duration::from_secs(60))
             .decide(&vote_turn(), deadline)
             .await;
-        assert_eq!(decision, Decision::fallback(TurnKind::DayVote));
+        assert_failed_vote(decision);
         assert!(Instant::now() < deadline, "fallback must leave time to act");
     }
 
@@ -252,7 +258,7 @@ mod tests {
         let decision = brain(&url, Duration::from_secs(5))
             .decide(&vote_turn(), deadline)
             .await;
-        assert_eq!(decision, Decision::fallback(TurnKind::DayVote));
+        assert_failed_vote(decision);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
@@ -282,7 +288,20 @@ mod tests {
         let decision = brain(&url, Duration::from_secs(5))
             .decide(&vote_turn(), deadline)
             .await;
-        assert_eq!(decision, Decision::fallback(TurnKind::DayVote));
+        assert_failed_vote(decision);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// A vote that fell back after a model failure: abstain, and say why on stage.
+    fn assert_failed_vote(decision: Decision) {
+        assert_eq!(
+            decision.action,
+            Decision::fallback(TurnKind::DayVote).action
+        );
+        assert!(
+            decision
+                .reasoning
+                .is_some_and(|r| r.starts_with("My model failed"))
+        );
     }
 }

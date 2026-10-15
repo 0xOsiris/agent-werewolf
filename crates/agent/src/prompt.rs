@@ -14,7 +14,7 @@ const SPEECH_OPEN: &str = "<speech>";
 const SPEECH_CLOSE: &str = "</speech>";
 
 const RULES: &str = "\
-You are playing Werewolf, a social deduction game, against other AI players. An audience is watching live.
+You are playing Werewolf, a social deduction game, with other players: some are AIs, some are humans. An audience is watching live.
 
 RULES
 - Roles: werewolves (about 1 in 4 players), one seer, one doctor, maybe one sheriff, maybe one cupid, and villagers. The werewolves know each other; everyone else knows only their own role.
@@ -85,9 +85,9 @@ TRUST
 
 REPLY FORMAT
 Reply with a single JSON object and nothing else. Each turn tells you the exact fields.
-The \"reasoning\" field is private: the audience sees it, players never do. Write it as a quick thought to yourself:
+The \"aside\" field is a stage aside to the watching audience; players never see it. Use it to let the audience in on your play:
 - First person, plain everyday words, 1-2 short sentences, at most 25 words in total.
-- Say what you really believe and why you are acting this way. Use player names, never ids.
+- Tell them who you suspect and what you're doing about it. Use player names, never ids.
 - No game jargon (\"scum\", \"town read\", \"mislynch\") and no meta talk (\"as an AI\", \"strategy-wise\").
 Examples (made-up names):
 - Wolf: \"I'm a wolf. Cleo is onto me, so I'll blame Bob first.\"
@@ -446,8 +446,8 @@ fn render_turn(out: &mut String, turn: &Turn, names: &Names<'_>) {
 }
 
 fn reply_format(kind: TurnKind) -> String {
-    let reasoning =
-        r#""reasoning": "<what you really think and why, first person, at most 25 words>""#;
+    // Opus refuses requests framed as revealing its private reasoning, so this is an audience aside.
+    let reasoning = r#""aside": "<a quick aside to the audience: who you suspect and your plan, first person, at most 25 words>""#;
     match kind {
         TurnKind::DaySpeak | TurnKind::WolfChat | TurnKind::DeadChat => {
             format!(
@@ -726,7 +726,7 @@ mod tests {
             r#""say": "<one short sentence out loud, at most 15 words, or empty to stay quiet>""#
         ));
         assert!(prompt.contains(
-            r#""reasoning": "<what you really think and why, first person, at most 25 words>""#
+            r#""aside": "<a quick aside to the audience: who you suspect and your plan, first person, at most 25 words>""#
         ));
     }
 
