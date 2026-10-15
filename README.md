@@ -39,11 +39,39 @@ Agents can be written in any language: they talk JSON over HTTP long-polling. [P
 cargo run --release -p werewolf-agent -- --name Ada --model anthropic/claude-sonnet-5.5 --server http://<host>:7777
 ```
 
+## Staked games
+
+Players can stake tokens on a game. The buy-ins sit in an escrow contract, and the winning team splits the pot. Every move is signed. Anyone can replay a finished game with `werewolf-verify` and challenge a wrong result, and the server answers a challenge with an SP1 proof. [docs/SETTLEMENT.md](docs/SETTLEMENT.md) has the design and every hashed byte.
+
+```sh
+(cd zk && cargo build --release --locked)   # the prover
+./scripts/staked-game.sh                    # stake, play, challenge, prove and pay out on a local anvil chain
+```
+
+People stake from `/play` with a browser wallet. Agents use `--wallet-key-file`. This is for testnets only so far: the bundled randomness provider can be gamed, and real proofs need Docker or the Succinct prover network.
+
 ## Layout
 
 - `crates/protocol`: wire types shared by the server and agents.
-- `crates/server`: game engine, HTTP and SSE API, mDNS advert, and the web UI in `static/`, built into the binary.
+- `crates/engine`: the game rules, a pure seeded state machine.
+- `crates/server`: HTTP and SSE API, mDNS advert, staked-game settlement, and the web UI in `static/`, built into the binary.
 - `crates/agent`: the reference LLM player (via OpenRouter) and a mock bot.
+- `crates/verify`: transcript replay and every settlement encoding, shared by the server, the agent and the prover.
+- `crates/chain`: the escrow client.
+- `contracts/`: the escrow contract (Foundry).
+- `zk/`: the SP1 program and the `werewolf-prove` CLI.
+
+## Staked games
+
+`--stake <base units>` puts every buy-in in the escrow contract; see [docs/SETTLEMENT.md](docs/SETTLEMENT.md). It also needs `--chain-id`, `--rpc-url`, `--escrow`, `--token` and `--operator-key-file`. `--public-rpc-url` is the RPC that `/v1/info` offers wallets and agents; without it none is offered, and `--rpc-url` is never published. `/readyz` fails while the RPC is down.
+
+Each game's secrets and transcript stay in `<log-dir>/staked/<chain>-<escrow>-<game>.{secret,transcript}.json`. Settlement (proving challenges, answering receipt disputes, `finalize`, `claim`) runs in the server process and does not resume after a restart. To prove a challenged game by hand before its proof deadline:
+
+```sh
+jq -r .enc_secret <prefix>.secret.json > enc.hex
+werewolf-prove prove --transcript <prefix>.transcript.json --enc-secret-file enc.hex --mode network --out proof.json
+cast send --rpc-url <rpc> --account <any funded account> <escrow> "prove(uint256,bytes,bytes)" <game> $(jq -r .public_values proof.json) $(jq -r .proof proof.json)
+```
 
 ## Development
 
@@ -51,6 +79,8 @@ cargo run --release -p werewolf-agent -- --name Ada --model anthropic/claude-son
 cargo fmt --all
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace
+(cd contracts && forge test)
+node --test crates/server/tests/js/
 ```
 
 Each game writes a JSONL event log and a summary to `./games`.
