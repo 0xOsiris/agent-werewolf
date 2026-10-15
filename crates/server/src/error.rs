@@ -18,6 +18,9 @@ pub enum HttpError {
     Conflict(String),
     #[error("{0}")]
     Invalid(String),
+    /// A dependency such as the chain RPC is down, or the staked game isn't ready yet.
+    #[error("{0}")]
+    Unavailable(String),
     #[error("{message}")]
     Rejected { status: StatusCode, message: String },
     #[error("not found")]
@@ -37,11 +40,16 @@ impl HttpError {
         Self::Invalid(message.into())
     }
 
+    pub fn unavailable(message: impl Into<String>) -> Self {
+        Self::Unavailable(message.into())
+    }
+
     fn status(&self) -> StatusCode {
         match self {
             Self::Unauthorized | Self::BadKey => StatusCode::UNAUTHORIZED,
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Rejected { status, .. } => *status,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,

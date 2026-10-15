@@ -1,0 +1,491 @@
+{
+  "version": 1,
+  "chain_id": 31337,
+  "escrow": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
+  "game_id": "1",
+  "rules": {
+    "wolves": 2,
+    "sheriff": true,
+    "cupid": true
+  },
+  "seats": [
+    {
+      "address": "0x00000000000000000000000000000000000000a0",
+      "session_key": "0x8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+    },
+    {
+      "address": "0x00000000000000000000000000000000000000a1",
+      "session_key": "0x8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394"
+    },
+    {
+      "address": "0x00000000000000000000000000000000000000a2",
+      "session_key": "0xed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1"
+    },
+    {
+      "address": "0x00000000000000000000000000000000000000a3",
+      "session_key": "0xca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c"
+    },
+    {
+      "address": "0x00000000000000000000000000000000000000a4",
+      "session_key": "0x6e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1"
+    },
+    {
+      "address": "0x00000000000000000000000000000000000000a5",
+      "session_key": "0x8a875fff1eb38451577acd5afee405456568dd7c89e090863a0557bc7af49f17"
+    },
+    {
+      "address": "0x00000000000000000000000000000000000000a6",
+      "session_key": "0xea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c"
+    },
+    {
+      "address": "0x00000000000000000000000000000000000000a7",
+      "session_key": "0x1398f62c6d1a457c51ba6a4b5f3dbd2f69fca93216218dc8997e416bd17d93ca"
+    }
+  ],
+  "names": [
+    "Sherlock",
+    "osiris",
+    "Ada",
+    "bjørn",
+    "Mallory",
+    "Zoë",
+    "Trent",
+    "Peggy"
+  ],
+  "seed": "0x1111111111111111111111111111111111111111111111111111111111111111",
+  "randomness": "0x2222222222222222222222222222222222222222222222222222222222222222",
+  "enc_key": "0x7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
+  "op_log": [
+    {
+      "kind": "checkpoint",
+      "round": 0
+    },
+    {
+      "kind": "force",
+      "seat": 1,
+      "round": 1,
+      "payload": "0xa4e09292b651c278b9772c569f5fa9bb13d906b46ab68c9df9dc2b4409f8a209c8c528a440084debaa95198c6af22d01244c24c69b286c086f7c2d153c8763fba331392232300d0b8addf16091ad0c"
+    },
+    {
+      "kind": "force",
+      "seat": 1,
+      "round": 1,
+      "payload": "0xce8d3ad1ccb633ec7b70c17814a5c76ecd029685050d344745ba05870e587d59976994c6aab46cd82ad89a4a516e8b4a5290bdaef525a138a3864d8c9a47c2580eeb9b439b935ab9a271397c"
+    },
+    {
+      "kind": "checkpoint",
+      "round": 1
+    },
+    {
+      "kind": "force",
+      "seat": 0,
+      "round": 2,
+      "payload": "0x5dfedd3b6bd47f6fa28ee15d969d5bb0ea53774d488bdaf9df1c6e0124b3ef220b42caf34f7984a15aed70ec78bb04016ea2ac4dee182be4d252e4ef06f23a4a1fd99212a4361d1732205d2f897265"
+    },
+    {
+      "kind": "force",
+      "seat": 6,
+      "round": 2,
+      "payload": "0xdededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededededede"
+    },
+    {
+      "kind": "checkpoint",
+      "round": 2
+    },
+    {
+      "kind": "checkpoint",
+      "round": 3
+    },
+    {
+      "kind": "checkpoint",
+      "round": 4
+    },
+    {
+      "kind": "checkpoint",
+      "round": 5
+    },
+    {
+      "kind": "checkpoint",
+      "round": 6
+    },
+    {
+      "kind": "checkpoint",
+      "round": 7
+    },
+    {
+      "kind": "checkpoint",
+      "round": 8
+    },
+    {
+      "kind": "force",
+      "seat": 0,
+      "round": 9,
+      "payload": "0xabababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
+    }
+  ],
+  "steps": [
+    {
+      "type": "round",
+      "round": 0,
+      "answers": [
+        {
+          "seat": 1,
+          "source": "signed",
+          "turn_id": 1,
+          "action": {
+            "type": "target",
+            "target": 0
+          },
+          "log_hash": "0x17269bcf182aac4ab1d478811bc65c266a3991c62ee2c53e0ebf94d82be12da2",
+          "signature": "0xd79527b0f5bb83d6f7534eb78af209afce4a06ff9228d4f783f7757e7d8079dbb2bb1dbf506ad865420c91ef73ab63f9fef7842bebecdf46eb69ba024e004804"
+        }
+      ]
+    },
+    {
+      "type": "round",
+      "round": 1,
+      "answers": [
+        {
+          "seat": 1,
+          "source": "forced",
+          "op_index": 2,
+          "action": {
+            "type": "target",
+            "target": 1
+          }
+        }
+      ]
+    },
+    {
+      "type": "chat",
+      "kind": "wolf_chat",
+      "messages": [
+        {
+          "seat": 0,
+          "turn_id": 3,
+          "text": "Seat 0 here, step 2.",
+          "log_hash": "0x17269bcf182aac4ab1d478811bc65c266a3991c62ee2c53e0ebf94d82be12da2",
+          "signature": "0xec6629c9b1a556cbadbbe194cbcacac92137c6d2eb06ab5af6fd2819f4cf40222f9ccf5b13abfaa1b55d8f311fe47a5e9b4f29713d2998318b6ae978c01cb906"
+        },
+        {
+          "seat": 6,
+          "turn_id": 4,
+          "text": "Grüße from 6 🐺\nstep 2",
+          "log_hash": "0xc925591e5d0202acca930054c1e947a2380a57994507a84356cc133d15151087",
+          "signature": "0xed0dc498ddceb2d068d8bc691818e74b6441a2a2e19415d5fd44a4dabe2da0ebbf04c246def7a40ee0deb60f356bc4fd4ca3823da616b922710928f46c1b7000"
+        }
+      ]
+    },
+    {
+      "type": "round",
+      "round": 2,
+      "answers": [
+        {
+          "seat": 0,
+          "source": "signed",
+          "turn_id": 5,
+          "action": {
+            "type": "target",
+            "target": 1
+          },
+          "log_hash": "0x17269bcf182aac4ab1d478811bc65c266a3991c62ee2c53e0ebf94d82be12da2",
+          "signature": "0x5c475d9e999384a9e163e68ad3275905d34bd49e09d30cedf92f9d9201a7cb36c143ffb6c8bb82ce52b47714f8eb6c3fdc7a358f8465680daba7566414c35b0c"
+        },
+        {
+          "seat": 4,
+          "source": "signed",
+          "turn_id": 6,
+          "action": {
+            "type": "target",
+            "target": 7
+          },
+          "log_hash": "0x17269bcf182aac4ab1d478811bc65c266a3991c62ee2c53e0ebf94d82be12da2",
+          "signature": "0xb47c4917ae1f860818845ac17fde1467cfde5a41c00507d6d600e1a3ecba8f128c0736847036d715d45e6795ce6f52f402c8612bc1070ff84a26b56dd6ab210f"
+        },
+        {
+          "seat": 5,
+          "source": "signed",
+          "turn_id": 7,
+          "action": {
+            "type": "target",
+            "target": 7
+          },
+          "log_hash": "0x17269bcf182aac4ab1d478811bc65c266a3991c62ee2c53e0ebf94d82be12da2",
+          "signature": "0xc822794fe8e20ac3c689b8b027a9fa4bee34fed163c77bf9bc07a26b765950d69178f1d7ed2563c7889d8668e53301f4d9b2bc3e6218c0037060228791411f02"
+        },
+        {
+          "seat": 6,
+          "source": "timeout"
+        }
+      ]
+    },
+    {
+      "type": "chat",
+      "kind": "day_speak",
+      "messages": [
+        {
+          "seat": 2,
+          "turn_id": 9,
+          "text": "Seat 2 here, step 4.",
+          "log_hash": "0x2e3d20da2b896372d0af1f2fbd45c602ade7ad7522420aab80036039793b0669",
+          "signature": "0xaed2738645d957e02f4a2bd0f7f954973ab28a07663a2b483d507d8e82b1f887ab5ce14c155fbf3a3ecd63108cf94c3bf899aa9b6b3a071c07406f7cffa90e0b"
+        },
+        {
+          "seat": 3,
+          "turn_id": 10,
+          "text": "Grüße from 3 🐺\nstep 4",
+          "log_hash": "0x2e3d20da2b896372d0af1f2fbd45c602ade7ad7522420aab80036039793b0669",
+          "signature": "0x97719f03fcf18c43e352271ea7148413af10b2f13398f6a6c3fdc452e528307fc59991fa0d60a2837f69ab2fbf53e714012a628bc594220481544576744db901"
+        }
+      ]
+    },
+    {
+      "type": "round",
+      "round": 3,
+      "answers": [
+        {
+          "seat": 7,
+          "source": "signed",
+          "turn_id": 11,
+          "action": {
+            "type": "target",
+            "target": null
+          },
+          "log_hash": "0x7a9a9ec60e2eb5da95776a5ce0e2532bd77a13410761ad30ad45cf4c85363076",
+          "signature": "0x616737068ea6b02aa64c6183f541885db3b490496fd087822475298db858dfaa1686339dc480592720e88f7c997af9ea7795914a92ccc73a319998f5652eb00b"
+        }
+      ]
+    },
+    {
+      "type": "round",
+      "round": 4,
+      "answers": [
+        {
+          "seat": 2,
+          "source": "signed",
+          "turn_id": 12,
+          "action": {
+            "type": "target",
+            "target": 3
+          },
+          "log_hash": "0x7a9a9ec60e2eb5da95776a5ce0e2532bd77a13410761ad30ad45cf4c85363076",
+          "signature": "0xa722c1243ecf3cec92a2bcd2f14e8ad4885351038dc57eb7a738a1b14dc18feeb25747da7628214efbd9bd4c5498ea8b38839896e1501cdb8c6b1e383857d70e"
+        },
+        {
+          "seat": 3,
+          "source": "signed",
+          "turn_id": 13,
+          "action": {
+            "type": "target",
+            "target": 2
+          },
+          "log_hash": "0x7a9a9ec60e2eb5da95776a5ce0e2532bd77a13410761ad30ad45cf4c85363076",
+          "signature": "0x8de071e72248ed72d1d6421f251a8321b26346ad4a46908117de804c8a468ad03d23a2b83d73666ffc76cfa850d8a47f976e085af6301292fa669e744a83900a"
+        },
+        {
+          "seat": 4,
+          "source": "signed",
+          "turn_id": 14,
+          "action": {
+            "type": "target",
+            "target": 2
+          },
+          "log_hash": "0x7a9a9ec60e2eb5da95776a5ce0e2532bd77a13410761ad30ad45cf4c85363076",
+          "signature": "0x68ea4842d54b9c0d2346ae5ce45e73d399b5ba501cf09f2bdeea599f9a842c3c5034ea3d3c4f598b7d1985cf365c2648b85b8760ec0579a056aa097fee43cd0a"
+        },
+        {
+          "seat": 5,
+          "source": "signed",
+          "turn_id": 15,
+          "action": {
+            "type": "target",
+            "target": 2
+          },
+          "log_hash": "0x7a9a9ec60e2eb5da95776a5ce0e2532bd77a13410761ad30ad45cf4c85363076",
+          "signature": "0x73c57d7a1045ed0df93a7a0bffc9470739323ab021a3a90ff2739bc2f801da1e5059903286c2aa4dd71f803396743f74c6d1576458830211d8af4546ae956f08"
+        },
+        {
+          "seat": 6,
+          "source": "signed",
+          "turn_id": 16,
+          "action": {
+            "type": "target",
+            "target": 2
+          },
+          "log_hash": "0x7a9a9ec60e2eb5da95776a5ce0e2532bd77a13410761ad30ad45cf4c85363076",
+          "signature": "0x8ee5257dca3f7b4aa1c256faf8cbc80a8a3586a149f2cd2b522fc4c0f1d220d77df6447c3302e9343e797182139aab0c1e662b198f8b407e85c22dbdcb027e06"
+        },
+        {
+          "seat": 7,
+          "source": "signed",
+          "turn_id": 17,
+          "action": {
+            "type": "target",
+            "target": 2
+          },
+          "log_hash": "0x7a9a9ec60e2eb5da95776a5ce0e2532bd77a13410761ad30ad45cf4c85363076",
+          "signature": "0x79d2546a6d1398b2eb5a0252fec07e570a261f053b67f2f2440155f596ec6d53e3907044bc18009c5f8b010930e93af965e8d504fcbaa1e346136e4361fccb0a"
+        }
+      ]
+    },
+    {
+      "type": "round",
+      "round": 5,
+      "answers": [
+        {
+          "seat": 4,
+          "source": "signed",
+          "turn_id": 18,
+          "action": {
+            "type": "target",
+            "target": 6
+          },
+          "log_hash": "0xfd6c0fd3f2fb972f6a18613ee907ea54244053dd87e3a2d8508a0ff366dea6d6",
+          "signature": "0x57107e93118bb6e05a62a09440841fe7a6ab49be063aa44a15ec7163a4648ad4bb414c68f12262edea977a229ecdd3626a591ed034e2d2b62946e71a29b56803"
+        },
+        {
+          "seat": 5,
+          "source": "signed",
+          "turn_id": 19,
+          "action": {
+            "type": "target",
+            "target": 7
+          },
+          "log_hash": "0xfd6c0fd3f2fb972f6a18613ee907ea54244053dd87e3a2d8508a0ff366dea6d6",
+          "signature": "0x206cdc421212354f770054553ce3932558458ed67e9cce14986166ae13e6bf73022aa550e88001ce5f7b80f516426a79a37a71fa4ca981b003bf2fcb0d364e09"
+        },
+        {
+          "seat": 6,
+          "source": "signed",
+          "turn_id": 20,
+          "action": {
+            "type": "target",
+            "target": 3
+          },
+          "log_hash": "0xfd6c0fd3f2fb972f6a18613ee907ea54244053dd87e3a2d8508a0ff366dea6d6",
+          "signature": "0x3934b4f36816d59f6ce692f27a4df5b20b7aa26b75ed3faeefa3111bce7aa9f3f9a86dbbf271b36a8234fb23ae9b60bc6b24225b6cd4dbbf9edd69e84c77d103"
+        }
+      ]
+    },
+    {
+      "type": "chat",
+      "kind": "day_speak",
+      "messages": [
+        {
+          "seat": 4,
+          "turn_id": 21,
+          "text": "Seat 4 here, step 8.",
+          "log_hash": "0xe1c67c8dbb4485ddf979be75fc0319801461d67aac45e92e13b7bacaf4f7657f",
+          "signature": "0xfbf9336f383f827ef4ea0b9863ee36debf24de97a259c2c57fc2d5d663b4bfad566c747ffc8fcdb03332c0cd2be58160e3afd6138d40123ba9f3465ade274a0a"
+        },
+        {
+          "seat": 5,
+          "turn_id": 22,
+          "text": "Grüße from 5 🐺\nstep 8",
+          "log_hash": "0xe1c67c8dbb4485ddf979be75fc0319801461d67aac45e92e13b7bacaf4f7657f",
+          "signature": "0x02cfd82b04e9dbc38cbb535c7143b7c27208cb471aad93bcf8b724df1006c643c1cd41c8b3116aaf7aed41cf46abcc1b280513ff27f44eeb227d3304690c1d03"
+        }
+      ]
+    },
+    {
+      "type": "round",
+      "round": 6,
+      "answers": [
+        {
+          "seat": 7,
+          "source": "signed",
+          "turn_id": 23,
+          "action": {
+            "type": "target",
+            "target": null
+          },
+          "log_hash": "0xb889eb39195c3fae882df9ee24832b38d384b04212fd1890bbae22c371b200b6",
+          "signature": "0xa0eb7e116e1ebdc7a5e3016f0a816ec2d08b021e6f9994211dfa039f253fd4be5c664fd74a656c4354c3258f2191f6f16e9fe97e8d2412d90c89435a71ee0406"
+        }
+      ]
+    },
+    {
+      "type": "round",
+      "round": 7,
+      "answers": [
+        {
+          "seat": 4,
+          "source": "signed",
+          "turn_id": 24,
+          "action": {
+            "type": "target",
+            "target": 5
+          },
+          "log_hash": "0xb889eb39195c3fae882df9ee24832b38d384b04212fd1890bbae22c371b200b6",
+          "signature": "0x608bf6ca8f973605711bf5db1afe069ffb22648c010618e9bb2184b00f1991232b048e7bbdbbfb25806e363e17aae79e8428b0e4b1713178ba7d57663e4ac007"
+        },
+        {
+          "seat": 5,
+          "source": "signed",
+          "turn_id": 25,
+          "action": {
+            "type": "target",
+            "target": 4
+          },
+          "log_hash": "0xb889eb39195c3fae882df9ee24832b38d384b04212fd1890bbae22c371b200b6",
+          "signature": "0xd72c82457a01a5a7191d28266a979fd53e173cdb2a6ab95f256e7f1420246d2b9ab48c8ebc22376bf9613639d6a3607be1a0d419e5c33962cc15ce810a9d520f"
+        },
+        {
+          "seat": 6,
+          "source": "signed",
+          "turn_id": 26,
+          "action": {
+            "type": "target",
+            "target": 4
+          },
+          "log_hash": "0xb889eb39195c3fae882df9ee24832b38d384b04212fd1890bbae22c371b200b6",
+          "signature": "0x66b44f257902717a13317c6b4556c20bb097235b7952666cc75c8c62a93501bdb165e681cb82cbb5adae36b345160042e6310da3be468dc676a627553cf71105"
+        },
+        {
+          "seat": 7,
+          "source": "signed",
+          "turn_id": 27,
+          "action": {
+            "type": "target",
+            "target": 4
+          },
+          "log_hash": "0xb889eb39195c3fae882df9ee24832b38d384b04212fd1890bbae22c371b200b6",
+          "signature": "0x6c953b82784a52180a2885fac2c53fe5e0e44fbfbe76b610ed93c3a77fbcdcac2230b17b90e632d7694a7758c19fe177864ff190da18c0da0687197686169506"
+        }
+      ]
+    },
+    {
+      "type": "round",
+      "round": 8,
+      "answers": [
+        {
+          "seat": 5,
+          "source": "signed",
+          "turn_id": 28,
+          "action": {
+            "type": "target",
+            "target": 7
+          },
+          "log_hash": "0xeb4198dec83a311d42facfa7dfc22ed7a6c31b9cb2dd494bbd5f802c3bb809b6",
+          "signature": "0x22122b202985de8e3310b60438244dee241e16dc9c2e12fcfaf677258fe8bb82dd1bb17152286355feb43e255d6b087933769c301274530acb2892c60d0e3b00"
+        },
+        {
+          "seat": 6,
+          "source": "signed",
+          "turn_id": 29,
+          "action": {
+            "type": "target",
+            "target": 5
+          },
+          "log_hash": "0xeb4198dec83a311d42facfa7dfc22ed7a6c31b9cb2dd494bbd5f802c3bb809b6",
+          "signature": "0x1d2a718de11f43931b402bc99b5aec8eb0d5fe4fe367e5936b03b8f1d1213b1d35b39ae0d42a1c408d54b9acd0a8446143098cbb2ff8eb70e8edfe37b08b7b06"
+        }
+      ]
+    }
+  ],
+  "result": {
+    "winner_team": 1,
+    "winners": "0x40",
+    "transcript_root": "0x31db6218cd718ae6facaf668ce2c75a2249e74fc29f7ff29bd379951cc4edf54"
+  }
+}

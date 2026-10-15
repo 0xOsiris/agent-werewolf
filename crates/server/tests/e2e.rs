@@ -78,6 +78,7 @@ impl Server {
             name: name.to_owned(),
             model: Some("test/random".to_owned()),
             human,
+            stake: None,
         };
         self.client
             .post(self.url("/v1/join"))
@@ -144,6 +145,8 @@ impl Server {
             turn_id,
             action,
             reasoning: Some(format!("{REASONING}: thinking out loud")),
+            log_hash: None,
+            signature: None,
         };
         self.client
             .post(self.url("/v1/act"))
@@ -433,6 +436,16 @@ async fn rejects_bad_auth_and_bad_requests() {
     assert_eq!(snapshot["type"], "snapshot");
     assert_eq!(snapshot["players"][0]["name"], "alice");
     drop(res);
+
+    for (path, status) in [
+        ("/v1/transcript", StatusCode::NOT_FOUND),
+        ("/v1/transcript?game_id=1", StatusCode::NOT_FOUND),
+        ("/v1/transcript?game_id=../x", StatusCode::BAD_REQUEST),
+        ("/v1/transcript?game_id=1%2F..", StatusCode::BAD_REQUEST),
+        ("/v1/transcript?game_id=", StatusCode::BAD_REQUEST),
+    ] {
+        assert_eq!(server.get(path).await.status(), status, "{path}");
+    }
 
     let info: Value = server.get("/v1/info").await.json().await.unwrap();
     assert_eq!(info["version"], 1);

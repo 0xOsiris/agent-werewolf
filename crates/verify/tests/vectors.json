@@ -1,0 +1,239 @@
+{
+  "about": "Fixed inputs and expected outputs for docs/SETTLEMENT.md. Hex is 0x-prefixed; regenerate with UPDATE_VECTORS=1 cargo test -p werewolf-verify --test vectors.",
+  "domain": {
+    "chain_id": 31337,
+    "escrow": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
+    "game_id": "1",
+    "bytes": "0x0000000000007a695fbdb2315678afecb367f032d93f642f64180aa30000000000000000000000000000000000000000000000000000000000000001"
+  },
+  "acts": [
+    {
+      "name": "speak",
+      "secret_key": "0x0202020202020202020202020202020202020202020202020202020202020202",
+      "session_key": "0x8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+      "turn_id": 7,
+      "step": 3,
+      "seat": 1,
+      "log_hash": "0xc011d84f7b0a94eff40b1e14edcafbe6d30624e2e978461cd16b7cf3999aa8cc",
+      "action": {
+        "type": "speak",
+        "text": "I think seat 4 is lying.\nVote 4."
+      },
+      "action_json": "{\"type\":\"speak\",\"text\":\"I think seat 4 is lying.\\nVote 4.\"}",
+      "message": "0x77657265776f6c662f6163742f76310000000000007a695fbdb2315678afecb367f032d93f642f64180aa3000000000000000000000000000000000000000000000000000000000000000100000000000000070000000300000001c011d84f7b0a94eff40b1e14edcafbe6d30624e2e978461cd16b7cf3999aa8cc7b2274797065223a22737065616b222c2274657874223a2249207468696e6b20736561742034206973206c79696e672e5c6e566f746520342e227d",
+      "act_hash": "0x99fa91dc1253dbdff03d32c46438b26d921dda880be3482c8e4cc1a7a095dfb4",
+      "signature": "0x845f4aa53788473479dddb17d46c94f08c770ecd0a8d32e2e086a256ef8844b0403f9334fd1f1b13208131f43f070f706da31fddea888f83a036372c43203501",
+      "receipt_digest": "0xeafe57692acf60831e16051e5c91468c13e2f0713e986f46adb26327fef47911"
+    },
+    {
+      "name": "target_null",
+      "secret_key": "0x0303030303030303030303030303030303030303030303030303030303030303",
+      "session_key": "0xed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1",
+      "turn_id": 7,
+      "step": 4,
+      "seat": 2,
+      "log_hash": "0x17269bcf182aac4ab1d478811bc65c266a3991c62ee2c53e0ebf94d82be12da2",
+      "action": {
+        "type": "target",
+        "target": null
+      },
+      "action_json": "{\"type\":\"target\",\"target\":null}",
+      "message": "0x77657265776f6c662f6163742f76310000000000007a695fbdb2315678afecb367f032d93f642f64180aa300000000000000000000000000000000000000000000000000000000000000010000000000000007000000040000000217269bcf182aac4ab1d478811bc65c266a3991c62ee2c53e0ebf94d82be12da27b2274797065223a22746172676574222c22746172676574223a6e756c6c7d",
+      "act_hash": "0xd8aac1a8f02bbc5d327f56eb454650a48365947f14c37a6136b7ae355d4b00df",
+      "signature": "0x5fea65d3fc888a76d46b1e5e8344549279d639f363a6945f70fe18f553f9f153be4d59957704bb64124a46cf27b62e6c7ee4c204c53ee4a6105b723f27c90b0e",
+      "receipt_digest": "0x173f5b199edd8f099e836f4145abc1cef4b1e236642c6009013a673127791752"
+    }
+  ],
+  "join": {
+    "secret_key": "0x0909090909090909090909090909090909090909090909090909090909090909",
+    "session_key": "0xfd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618",
+    "player": "0x00000000000000000000000000000000000000a9",
+    "message": "0x77657265776f6c662f6a6f696e2f76310000000000007a695fbdb2315678afecb367f032d93f642f64180aa3000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000a9",
+    "signature": "0x44a5ae5eaa08d2403e0abe7bae862cff3f5c929457c7c6eee52310545ba5e4545c7834b6a3c96f2994c8769bcfc32dcc6fe3fe16a85db24391172f8544a22508"
+  },
+  "log": {
+    "events": [
+      {
+        "type": "phase_started",
+        "phase": {
+          "kind": "night",
+          "n": 1
+        }
+      },
+      {
+        "type": "spoke",
+        "player": 2,
+        "text": "Grüße aus dem Café 🐺\n\"wolf\" is seat 4"
+      },
+      {
+        "type": "died",
+        "player": 3,
+        "role": "seer",
+        "cause": "night"
+      }
+    ],
+    "event_json": [
+      "{\"type\":\"phase_started\",\"phase\":{\"kind\":\"night\",\"n\":1}}",
+      "{\"type\":\"spoke\",\"player\":2,\"text\":\"Grüße aus dem Café 🐺\\n\\\"wolf\\\" is seat 4\"}",
+      "{\"type\":\"died\",\"player\":3,\"role\":\"seer\",\"cause\":\"night\"}"
+    ],
+    "hashes": [
+      "0xc925591e5d0202acca930054c1e947a2380a57994507a84356cc133d15151087",
+      "0x17269bcf182aac4ab1d478811bc65c266a3991c62ee2c53e0ebf94d82be12da2",
+      "0x955c8732410b3fdc1d9a2eafe4e98cc5f7fe649554dd2ebdd89f167039ab2950",
+      "0xc011d84f7b0a94eff40b1e14edcafbe6d30624e2e978461cd16b7cf3999aa8cc"
+    ]
+  },
+  "merkle": [
+    {
+      "leaves": [
+        "0xe8e77626586f73b955364c7b4bbf0bb7f7685ebd40e852b164633a4acbd3244c"
+      ],
+      "root": "0xe8e77626586f73b955364c7b4bbf0bb7f7685ebd40e852b164633a4acbd3244c",
+      "proofs": [
+        []
+      ]
+    },
+    {
+      "leaves": [
+        "0xe8e77626586f73b955364c7b4bbf0bb7f7685ebd40e852b164633a4acbd3244c",
+        "0x51f81bcdfc324a0dff2b5bec9d92e21cbebc4d5e29d3a3d30de3e03fbeab8d7f"
+      ],
+      "root": "0xf82bc401778ebdd92687473c0a1d279ed47a7ccb6bf939c60c13819643ea7a39",
+      "proofs": [
+        [
+          "0x51f81bcdfc324a0dff2b5bec9d92e21cbebc4d5e29d3a3d30de3e03fbeab8d7f"
+        ],
+        [
+          "0xe8e77626586f73b955364c7b4bbf0bb7f7685ebd40e852b164633a4acbd3244c"
+        ]
+      ]
+    },
+    {
+      "leaves": [
+        "0xe8e77626586f73b955364c7b4bbf0bb7f7685ebd40e852b164633a4acbd3244c",
+        "0x51f81bcdfc324a0dff2b5bec9d92e21cbebc4d5e29d3a3d30de3e03fbeab8d7f",
+        "0x2ee5f854d076701c8753d72779187e404f9b2fb705c495137d78551250314a46"
+      ],
+      "root": "0x4090cd94913f4ad1f785ab7b6fdb0ddcb831ad45e17da2a6684b49076716d762",
+      "proofs": [
+        [
+          "0x51f81bcdfc324a0dff2b5bec9d92e21cbebc4d5e29d3a3d30de3e03fbeab8d7f",
+          "0x2ee5f854d076701c8753d72779187e404f9b2fb705c495137d78551250314a46"
+        ],
+        [
+          "0xe8e77626586f73b955364c7b4bbf0bb7f7685ebd40e852b164633a4acbd3244c",
+          "0x2ee5f854d076701c8753d72779187e404f9b2fb705c495137d78551250314a46"
+        ],
+        [
+          "0xf82bc401778ebdd92687473c0a1d279ed47a7ccb6bf939c60c13819643ea7a39"
+        ]
+      ]
+    },
+    {
+      "leaves": [
+        "0xe8e77626586f73b955364c7b4bbf0bb7f7685ebd40e852b164633a4acbd3244c",
+        "0x51f81bcdfc324a0dff2b5bec9d92e21cbebc4d5e29d3a3d30de3e03fbeab8d7f",
+        "0x2ee5f854d076701c8753d72779187e404f9b2fb705c495137d78551250314a46",
+        "0x3ef5a213fe22de1cea28d60f518364ff95fe0b73660793e3efcfbe31bda68aec",
+        "0xcc21cc9477a6aea5df8cae73422b700c47e54d892691e099167e77befc94780a"
+      ],
+      "root": "0x41a01ca745bcd3baeec1b241947d8f0566dbbc1c2e4f5f037bf8293120405540",
+      "proofs": [
+        [
+          "0x51f81bcdfc324a0dff2b5bec9d92e21cbebc4d5e29d3a3d30de3e03fbeab8d7f",
+          "0x1a08fc1fb852af3e86a874ffc9f53f3c7c88cf4a5db9cbfae7541eec9a3669f7",
+          "0xcc21cc9477a6aea5df8cae73422b700c47e54d892691e099167e77befc94780a"
+        ],
+        [
+          "0xe8e77626586f73b955364c7b4bbf0bb7f7685ebd40e852b164633a4acbd3244c",
+          "0x1a08fc1fb852af3e86a874ffc9f53f3c7c88cf4a5db9cbfae7541eec9a3669f7",
+          "0xcc21cc9477a6aea5df8cae73422b700c47e54d892691e099167e77befc94780a"
+        ],
+        [
+          "0x3ef5a213fe22de1cea28d60f518364ff95fe0b73660793e3efcfbe31bda68aec",
+          "0xf82bc401778ebdd92687473c0a1d279ed47a7ccb6bf939c60c13819643ea7a39",
+          "0xcc21cc9477a6aea5df8cae73422b700c47e54d892691e099167e77befc94780a"
+        ],
+        [
+          "0x2ee5f854d076701c8753d72779187e404f9b2fb705c495137d78551250314a46",
+          "0xf82bc401778ebdd92687473c0a1d279ed47a7ccb6bf939c60c13819643ea7a39",
+          "0xcc21cc9477a6aea5df8cae73422b700c47e54d892691e099167e77befc94780a"
+        ],
+        [
+          "0x931c81667c397032311e9396fee11bf0876c2146225a8a1a0c911d1c9e60cee2"
+        ]
+      ]
+    }
+  ],
+  "op_log": {
+    "entries": [
+      {
+        "kind": "force",
+        "seat": 3,
+        "round": 0,
+        "payload": "0xff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b50f9cbb91c256d091e17b4c587f67e0e42df0272f624a631e4113bf58c0fe4d73709fbfd5283b1ffa25ca752"
+      },
+      {
+        "kind": "checkpoint",
+        "round": 0
+      }
+    ],
+    "hashes": [
+      "0xc26978aef31a8eec06e7e842e373eff71a94cfe4ad66f5ecfe9d6ca27113c07b",
+      "0xfe8aca07bfd6fb73a3d601a8054f07e629ea0a0b07580558b95c5c9de883cfd6"
+    ]
+  },
+  "rules": {
+    "rules": {
+      "wolves": 2,
+      "sheriff": true,
+      "cupid": true
+    },
+    "rules_hash": "0xdf92d62175d67607cc8aab61268e34e39c3407c7a4b2b2b172f05931f43d4473"
+  },
+  "roster": {
+    "seats": [
+      {
+        "address": "0x00000000000000000000000000000000000000a0",
+        "session_key": "0x8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
+      },
+      {
+        "address": "0x00000000000000000000000000000000000000a1",
+        "session_key": "0x8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394"
+      },
+      {
+        "address": "0x00000000000000000000000000000000000000a2",
+        "session_key": "0xed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1"
+      }
+    ],
+    "roster_hash": "0xfcfb52392ce131208c9ef7e0d02ed30d30d6560947ad415ffc3fdec2632826d5"
+  },
+  "deal": {
+    "seed": "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "randomness": "0x2222222222222222222222222222222222222222222222222222222222222222",
+    "roster_hash": "0xfcfb52392ce131208c9ef7e0d02ed30d30d6560947ad415ffc3fdec2632826d5",
+    "seed_commit": "0xb569321de72d0af89c2fb48a484de3fc9343f31600ae1f3e13d633cb48cbf816",
+    "engine_seed": "0xd57eba70c4c155a387e0cbf42e01aab61149eb8bddffd32af35892080a6ab98a"
+  },
+  "force": {
+    "enc_secret": "0x3333333333333333333333333333333333333333333333333333333333333333",
+    "enc_key": "0x7b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b14",
+    "ephemeral_secret": "0x4444444444444444444444444444444444444444444444444444444444444444",
+    "ephemeral_public": "0xff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b",
+    "round": 2,
+    "seat": 3,
+    "action": {
+      "type": "target",
+      "target": 1
+    },
+    "plaintext": "{\"type\":\"target\",\"target\":1}",
+    "aad": "0x00000002000000030000000000007a695fbdb2315678afecb367f032d93f642f64180aa30000000000000000000000000000000000000000000000000000000000000001",
+    "payload": "0xff2ee45601ec1b67310c7790404585ae697331eee1c1f8cf2419731c1fff3e6b50f9cbb91c256d091e17b4c587f67e0e42df0272f624a631e4113bf58c0fe4d73709fbfd5283b1ffa25ca752"
+  },
+  "transcript": {
+    "file": "transcript.json",
+    "enc_secret": "0x3333333333333333333333333333333333333333333333333333333333333333",
+    "public_values": "0x0000000000000000000000000000000000000000000000000000000000007a690000000000000000000000005fbdb2315678afecb367f032d93f642f64180aa30000000000000000000000000000000000000000000000000000000000000001df92d62175d67607cc8aab61268e34e39c3407c7a4b2b2b172f05931f43d447344e4836ac44a29dc17d55336b2543f4516bb9a2a307bc2848f9592e8f25fd467b569321de72d0af89c2fb48a484de3fc9343f31600ae1f3e13d633cb48cbf81622222222222222222222222222222222222222222222222222222222222222227b0d47d93427f8311160781c7c733fd89f88970aef490d8aa0ee19a4cb8a1b1434eaa9c1c42719625a446a3863d0ad6817495dce6a9219f5c904b3d175202deb0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000004031db6218cd718ae6facaf668ce2c75a2249e74fc29f7ff29bd379951cc4edf54"
+  }
+}

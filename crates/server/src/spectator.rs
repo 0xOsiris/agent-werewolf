@@ -3,13 +3,9 @@
 use std::{borrow::Cow, sync::Arc};
 
 use serde::Serialize;
+use werewolf_engine::{Audience, GameEvent};
 use werewolf_protocol::{
-    Phase, PlayerId, PrivateEvent, PublicEvent, PublicPlayer, Role, Team, TurnKind,
-};
-
-use crate::{
-    engine::{Audience, GameEvent},
-    settings::SettingsBody,
+    Phase, PlayerId, PrivateEvent, PublicEvent, PublicPlayer, Role, SettingsBody, Team, TurnKind,
 };
 
 #[derive(Serialize, Clone, Debug)]
@@ -67,6 +63,10 @@ pub enum SpectatorEvent {
     Settings {
         settings: SettingsBody,
     },
+    /// A staked game stopped, e.g. a chain call failed or the join window closed.
+    Error {
+        message: String,
+    },
     Reset,
 }
 
@@ -75,7 +75,10 @@ impl SpectatorEvent {
     pub fn is_feed(&self) -> bool {
         matches!(
             self,
-            Self::Public { .. } | Self::Private { .. } | Self::Reasoning { .. }
+            Self::Public { .. }
+                | Self::Private { .. }
+                | Self::Reasoning { .. }
+                | Self::Error { .. }
         )
     }
 
@@ -89,6 +92,7 @@ impl SpectatorEvent {
             Self::PlayerJoined { .. }
             | Self::Public { .. }
             | Self::Settings { .. }
+            | Self::Error { .. }
             | Self::Reset => true,
             Self::Private { audience, .. } => match viewer {
                 Viewer::Player { id } => viewer.role(roles).is_some_and(|r| audience.admits(id, r)),

@@ -6,6 +6,9 @@ license.workspace = true
 
 [dependencies]
 werewolf-protocol.workspace = true
+werewolf-chain = { path = "../chain" }
+werewolf-verify = { workspace = true, features = ["getrandom"] }
+alloy-primitives = { version = "1.7.3", features = ["k256"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1.53.3", features = ["macros", "rt-multi-thread", "time"] }
@@ -19,5 +22,6 @@ rand = "0.10.3"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
+alloy = { version = "2.4.2", default-features = false, features = ["signer-local"] }
 axum = "0.8.9"
 tokio = { version = "1.53.3", features = ["test-util"] }

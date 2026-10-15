@@ -176,6 +176,8 @@ mod tests {
     fn turn(kind: TurnKind, candidates: Vec<PlayerId>) -> Turn {
         Turn {
             turn_id: 1,
+            step: 0,
+            round: None,
             kind,
             candidates,
             deadline_ms: 0,

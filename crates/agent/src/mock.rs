@@ -129,6 +129,8 @@ mod tests {
         };
         Turn {
             turn_id: 1,
+            step: 0,
+            round: None,
             kind,
             candidates: if kind == TurnKind::DaySpeak {
                 vec![]

@@ -51,6 +51,55 @@ pub enum Phase {
     Over,
 }
 
+/// `GET /v1/info`
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Info {
+    pub version: u32,
+    pub play_url: String,
+    pub settings: SettingsBody,
+    /// Escrow terms; present only for staked games.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stake: Option<StakeInfo>,
+}
+
+/// Lobby settings in whole seconds, as shown by `/v1/info` and changed through `/admin/settings`.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SettingsBody {
+    pub wolves: Option<u32>,
+    pub sheriff: bool,
+    pub cupid: bool,
+    pub discussion_secs: u32,
+    pub ai_chat_cooldown_secs: u32,
+    pub ai_max_chat_messages: u32,
+    pub human_turn_timeout_secs: u32,
+}
+
+/// A staked game's escrow terms. Hex values are 0x-prefixed; see `docs/SETTLEMENT.md`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct StakeInfo {
+    pub chain_id: u64,
+    /// Escrow contract address.
+    pub escrow: String,
+    /// Decimal.
+    pub game_id: String,
+    /// ERC-20 token address.
+    pub token: String,
+    /// Buy-in in the token's base units, decimal.
+    pub stake: String,
+    /// Address that signs receipts.
+    pub operator: String,
+    /// Operator's X25519 public key (32 bytes) for forced moves.
+    pub enc_key: String,
+    /// RPC endpoint the server suggests; players may use their own.
+    #[serde(default)]
+    pub rpc_url: Option<String>,
+    pub min_seats: u8,
+    pub max_seats: u8,
+    /// Unix seconds.
+    pub join_by: u64,
+}
+
 /// `POST /v1/join`
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct JoinRequest {
@@ -60,6 +109,20 @@ pub struct JoinRequest {
     /// A person playing through the browser; gets the longer human turn timeout.
     #[serde(default)]
     pub human: bool,
+    /// Proof of a staked seat; required in staked games.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stake: Option<StakeJoin>,
+}
+
+/// Ties a join to its on-chain seat. Hex strings, 0x-prefixed.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct StakeJoin {
+    /// Wallet that called `join` on the escrow.
+    pub address: String,
+    /// Ed25519 public key the seat registered.
+    pub session_key: String,
+    /// Session-key signature over the join message.
+    pub signature: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -86,6 +149,12 @@ pub enum Poll {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Turn {
     pub turn_id: u64,
+    /// Counts chat windows and target rounds together from 0; signed in staked games.
+    #[serde(default)]
+    pub step: u32,
+    /// Counts target rounds from 0; absent for chat turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round: Option<u32>,
     pub kind: TurnKind,
     /// Valid targets for target turns; empty for speak turns.
     pub candidates: Vec<PlayerId>,
@@ -224,6 +293,32 @@ pub struct ActRequest {
     /// Private reasoning shown to spectators only, never to other players.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
+    /// Public log hash the signature covers; staked games only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_hash: Option<String>,
+    /// Session-key signature over the act message; staked games only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+}
+
+/// `POST /v1/act` response.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct ActResponse {
+    /// The operator's promise to include the action; staked games only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<Receipt>,
+}
+
+/// Operator-signed proof that an action entered the transcript. Hex strings, 0x-prefixed.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Receipt {
+    pub turn_id: u64,
+    pub seat: u32,
+    pub act_hash: String,
+    /// `receiptDigest`, the Merkle leaf.
+    pub digest: String,
+    /// 65-byte secp256k1 signature over `digest`.
+    pub signature: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -249,10 +344,31 @@ mod tests {
             turn_id: 7,
             action: Action::Target { target: Some(3) },
             reasoning: None,
+            log_hash: None,
+            signature: None,
         };
         assert_eq!(
             serde_json::to_string(&act).unwrap(),
             r#"{"turn_id":7,"action":{"type":"target","target":3}}"#
+        );
+        let signed = ActRequest {
+            log_hash: Some("0x01".into()),
+            signature: Some("0x02".into()),
+            ..act
+        };
+        assert_eq!(
+            serde_json::to_string(&signed).unwrap(),
+            r#"{"turn_id":7,"action":{"type":"target","target":3},"log_hash":"0x01","signature":"0x02"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&ActResponse::default()).unwrap(),
+            "{}"
+        );
+        let join: JoinRequest = serde_json::from_str(r#"{"name":"a","model":null}"#).unwrap();
+        assert!(join.stake.is_none());
+        assert_eq!(
+            serde_json::to_string(&join).unwrap(),
+            r#"{"name":"a","model":null,"human":false}"#
         );
         assert_eq!(
             serde_json::to_string(&Phase::Night { n: 2 }).unwrap(),

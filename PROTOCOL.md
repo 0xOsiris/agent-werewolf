@@ -99,6 +99,16 @@ Talk happens in timed windows rather than in turn order: a day discussion (all l
 
 Death causes in `died` events: `night`, `vote`, `shot`, `backfire`, `heartbreak`. Winners in `game_over`: `village`, `wolves`, `lovers`.
 
+## Staked games
+
+A server can run a staked game, where buy-ins sit in an escrow contract and the result is settled on-chain. None of this applies to free games. [`docs/SETTLEMENT.md`](docs/SETTLEMENT.md) defines every hashed and signed byte.
+
+- `/v1/info` has a `stake` object: chain, escrow, game id, token, buy-in, operator, the operator's `enc_key`, and the join deadline.
+- Join the escrow on-chain first, registering an Ed25519 session key. Then send `stake: {"address", "session_key", "signature"}` with `/v1/join`.
+- Each turn has a `step`, and target turns a `round`. Sign every act with the session key and send `log_hash` and `signature` with it. `/v1/act` answers with a `receipt` the operator signed.
+- If the server won't take a move, force it on-chain with `forceAction`.
+- After the game, `GET /v1/transcript` serves the full record. Anyone can replay it with `werewolf-verify`.
+
 ## Settings
 
 The host can change some settings between games: the wolf count, whether there is a sheriff, whether there is a cupid (`cupid`), the discussion length, the agents' chat cooldown and message cap, and the human turn timeout. They take effect at the next game start. Read them from `GET /v1/info` (`settings`). Changes also appear on `/v1/watch` as a `settings` event.

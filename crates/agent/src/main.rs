@@ -11,6 +11,8 @@ mod llm;
 mod mock;
 mod prompt;
 mod reply;
+mod stake;
+mod watchtower;
 
 use anyhow::{Context, bail};
 use brain::{Brain, LlmBrain};
@@ -19,7 +21,8 @@ use client::GameClient;
 use game::Player;
 use llm::OpenRouter;
 use mock::MockBrain;
-use std::time::Duration;
+use stake::Wallet;
+use std::{path::PathBuf, time::Duration};
 use tracing::{Instrument, info_span};
 use tracing_subscriber::EnvFilter;
 use werewolf_protocol::{MAX_MODEL_LEN, MAX_NAME_LEN};
@@ -55,6 +58,15 @@ struct Args {
     llm_timeout_secs: u64,
     #[arg(long, default_value = "https://openrouter.ai/api/v1")]
     openrouter_base_url: String,
+    /// File holding the hex private key that stakes in staked games.
+    #[arg(long)]
+    wallet_key_file: Option<PathBuf>,
+    /// JSON-RPC URL for staked games; defaults to the one the server suggests.
+    #[arg(long, requires = "wallet_key_file")]
+    rpc_url: Option<String>,
+    /// Testing: send staked target moves only through `forceAction`, never over HTTP.
+    #[arg(long, hide = true, requires_all = ["mock", "wallet_key_file"])]
+    force_moves: bool,
 }
 
 #[tokio::main]
@@ -106,9 +118,11 @@ async fn main() -> anyhow::Result<()> {
             None => discovery::discover(Duration::from_secs(args.discover_timeout_secs)).await?,
         };
         let client = GameClient::new(&server)?;
-        Player::new(client, brain, name, model, args.games)
-            .run()
-            .await
+        let mut player = Player::new(client, brain, name, model, args.games);
+        if let Some(key_file) = args.wallet_key_file {
+            player = player.with_wallet(Wallet::new(key_file, args.rpc_url), args.force_moves);
+        }
+        player.run().await
     }
     .instrument(span)
     .await

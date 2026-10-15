@@ -1,11 +1,11 @@
 //! Pure, deterministic game rules. No I/O: the driver hands out [`Game::turns`] and feeds the
-//! answers back through [`Game::submit`].
+//! answers back through [`Game::submit`]. Kept free of async and networking so a zkVM can replay it.
 
 use std::{collections::BTreeMap, num::NonZeroUsize};
 
 use rand::{
     SeedableRng,
-    rngs::StdRng,
+    rngs::ChaCha20Rng,
     seq::{IndexedRandom, SliceRandom},
 };
 use serde::Serialize;
@@ -76,7 +76,7 @@ pub enum Audience {
 
 impl Audience {
     /// Whether `player`, dealt `role`, may see events for this audience.
-    pub(crate) fn admits(self, player: PlayerId, role: Role) -> bool {
+    pub fn admits(self, player: PlayerId, role: Role) -> bool {
         match self {
             Self::Wolves => role == Role::Werewolf,
             Self::Seer => role == Role::Seer,
@@ -126,7 +126,7 @@ enum Step {
 }
 
 pub struct Game {
-    rng: StdRng,
+    rng: ChaCha20Rng,
     players: Vec<PublicPlayer>,
     roles: Vec<Role>,
     died_on: Vec<Option<Phase>>,
@@ -150,7 +150,7 @@ impl Game {
     pub fn new(
         roster: Vec<PublicPlayer>,
         setup: Setup,
-        seed: u64,
+        seed: [u8; 32],
     ) -> Result<(Self, Vec<GameEvent>), EngineError> {
         let n = roster.len();
         let wolves = match setup.wolves.map(NonZeroUsize::get) {
@@ -165,7 +165,7 @@ impl Game {
                 need,
             });
         }
-        let mut rng = StdRng::seed_from_u64(seed);
+        let mut rng = ChaCha20Rng::from_seed(seed);
         let mut roles = vec![Role::Werewolf; wolves];
         roles.extend([Role::Seer, Role::Doctor]);
         if setup.sheriff {
@@ -744,8 +744,16 @@ mod tests {
             .collect()
     }
 
+    fn seed_bytes(seed: u64) -> [u8; 32] {
+        let mut bytes = [0; 32];
+        bytes[..8].copy_from_slice(&seed.to_be_bytes());
+        bytes
+    }
+
     fn game(n: usize, seed: u64) -> Game {
-        Game::new(roster(n), Setup::default(), seed).unwrap().0
+        Game::new(roster(n), Setup::default(), seed_bytes(seed))
+            .unwrap()
+            .0
     }
 
     fn speak(text: &str) -> Option<Action> {
@@ -823,7 +831,7 @@ mod tests {
     #[test]
     fn too_few_players_is_rejected() {
         assert_eq!(
-            Game::new(roster(4), Setup::default(), 0).err(),
+            Game::new(roster(4), Setup::default(), seed_bytes(0)).err(),
             Some(EngineError::TooFewPlayers(4))
         );
     }
@@ -831,14 +839,15 @@ mod tests {
     #[test]
     fn fixed_wolf_count() {
         for n in [5, 11] {
-            let (game, _) = Game::new(roster(n), setup(Some(2), false, false), 3).unwrap();
+            let (game, _) =
+                Game::new(roster(n), setup(Some(2), false, false), seed_bytes(3)).unwrap();
             let count = |role| game.roles().iter().filter(|&&r| r == role).count();
             assert_eq!(count(Role::Werewolf), 2, "n={n}");
             assert_eq!((count(Role::Seer), count(Role::Doctor)), (1, 1), "n={n}");
             assert_eq!(count(Role::Villager), n - 4, "n={n}");
         }
         let err = |n, wolves, sheriff| {
-            Game::new(roster(n), setup(wolves, sheriff, false), 3)
+            Game::new(roster(n), setup(wolves, sheriff, false), seed_bytes(3))
                 .err()
                 .map(|e| e.to_string())
         };
@@ -862,7 +871,7 @@ mod tests {
     }
 
     fn sheriff_game(n: usize, seed: u64) -> Game {
-        Game::new(roster(n), setup(None, true, false), seed)
+        Game::new(roster(n), setup(None, true, false), seed_bytes(seed))
             .unwrap()
             .0
     }
@@ -891,13 +900,13 @@ mod tests {
             assert_eq!(count(Role::Villager), n - wolves - 3, "n={n}");
         }
         assert_eq!(
-            Game::new(roster(5), setup(Some(2), true, false), 0)
+            Game::new(roster(5), setup(Some(2), true, false), seed_bytes(0))
                 .err()
                 .map(|e| e.to_string())
                 .as_deref(),
             Some("need at least 6 players for 2 wolves + sheriff")
         );
-        assert!(Game::new(roster(6), setup(Some(2), true, false), 0).is_ok());
+        assert!(Game::new(roster(6), setup(Some(2), true, false), seed_bytes(0)).is_ok());
     }
 
     #[test]
@@ -1330,7 +1339,7 @@ mod tests {
     }
 
     fn cupid_game(n: usize, sheriff: bool, seed: u64) -> Game {
-        Game::new(roster(n), setup(None, sheriff, true), seed)
+        Game::new(roster(n), setup(None, sheriff, true), seed_bytes(seed))
             .unwrap()
             .0
     }
@@ -1411,9 +1420,12 @@ mod tests {
             let case = format!("{wolves} wolves, sheriff={sheriff}, cupid={cupid}");
             assert_eq!(players_needed(wolves, sheriff, cupid), need, "{case}");
             let setup = setup(Some(wolves), sheriff, cupid);
-            assert!(Game::new(roster(need), setup, 0).is_ok(), "{case}");
+            assert!(
+                Game::new(roster(need), setup, seed_bytes(0)).is_ok(),
+                "{case}"
+            );
             assert_eq!(
-                Game::new(roster(need - 1), setup, 0).err(),
+                Game::new(roster(need - 1), setup, seed_bytes(0)).err(),
                 Some(EngineError::TooFewForSetup {
                     setup: describe_setup(wolves, sheriff, cupid),
                     need
@@ -1422,7 +1434,7 @@ mod tests {
             );
         }
         assert_eq!(
-            Game::new(roster(6), setup(Some(2), true, true), 0)
+            Game::new(roster(6), setup(Some(2), true, true), seed_bytes(0))
                 .err()
                 .map(|e| e.to_string())
                 .as_deref(),
@@ -1430,7 +1442,7 @@ mod tests {
         );
         // Without a fixed count, five seats get one wolf, which can't fit a sheriff and a cupid.
         assert_eq!(
-            Game::new(roster(5), setup(None, true, true), 0)
+            Game::new(roster(5), setup(None, true, true), seed_bytes(0))
                 .err()
                 .map(|e| e.to_string())
                 .as_deref(),

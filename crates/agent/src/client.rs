@@ -1,10 +1,12 @@
 //! Client for the game server's HTTP API.
 
-use crate::http::{HttpError, send, send_json};
+use crate::http::{HttpError, send_json};
+use alloy_primitives::U256;
 use anyhow::{Context, bail};
 use reqwest::{Client, Url};
 use std::time::Duration;
-use werewolf_protocol::{ActRequest, JoinRequest, JoinResponse, Poll};
+use werewolf_protocol::{ActRequest, ActResponse, Info, JoinRequest, JoinResponse, Poll};
+use werewolf_verify::Transcript;
 
 /// The server caps long-polls at 30s.
 const POLL_WAIT_SECS: u64 = 25;
@@ -13,6 +15,7 @@ const POLL_TIMEOUT: Duration = Duration::from_secs(35);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[derive(Clone)]
 pub struct GameClient {
     http: Client,
     base: String,
@@ -39,6 +42,10 @@ impl GameClient {
         &self.base
     }
 
+    pub async fn info(&self) -> Result<Info, HttpError> {
+        send_json(self.http.get(format!("{}/v1/info", self.base))).await
+    }
+
     pub async fn join(&self, request: &JoinRequest) -> Result<JoinResponse, HttpError> {
         send_json(
             self.http
@@ -53,10 +60,14 @@ impl GameClient {
         send_json(self.http.get(url).bearer_auth(token).timeout(POLL_TIMEOUT)).await
     }
 
-    pub async fn act(&self, token: &str, request: &ActRequest) -> Result<(), HttpError> {
+    pub async fn act(&self, token: &str, request: &ActRequest) -> Result<ActResponse, HttpError> {
         let url = format!("{}/v1/act", self.base);
-        send(self.http.post(url).bearer_auth(token).json(request))
-            .await
-            .map(drop)
+        send_json(self.http.post(url).bearer_auth(token).json(request)).await
+    }
+
+    /// A staked game's transcript; 404 until the game has ended.
+    pub async fn transcript(&self, game_id: U256) -> Result<Transcript, HttpError> {
+        let url = format!("{}/v1/transcript?game_id={game_id}", self.base);
+        send_json(self.http.get(url)).await
     }
 }

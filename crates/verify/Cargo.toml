@@ -1,0 +1,33 @@
+[package]
+name = "werewolf-verify"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "werewolf-verify"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+cli = ["dep:anyhow", "dep:clap"]
+# `force::encrypt_random`, drawing the ephemeral key from the OS.
+getrandom = ["dep:getrandom"]
+
+[dependencies]
+# sha2 0.10 and the dalek 2.x crates have SP1 precompile patches; newer majors don't yet.
+aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "alloc"] }
+alloy-primitives = { version = "1.7.3", features = ["serde"] }
+alloy-sol-types = "1.7.3"
+ed25519-dalek = "2.2.0"
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10.9"
+thiserror = "2.0.21"
+werewolf-engine.workspace = true
+werewolf-protocol.workspace = true
+x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
+anyhow = { version = "1.0.104", optional = true }
+clap = { version = "4.6.7", features = ["derive"], optional = true }
+getrandom = { version = "0.4.3", optional = true }

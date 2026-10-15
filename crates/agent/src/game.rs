@@ -6,13 +6,22 @@ use crate::{
     client::GameClient,
     http::HttpError,
     reply::{Decision, is_speak},
+    stake::{Seat, StakeError, Terms, Wallet},
+    watchtower::{self, Watch},
 };
-use anyhow::bail;
+use alloy_primitives::U256;
+use anyhow::{Context, bail};
 use reqwest::StatusCode;
 use std::time::Duration;
-use tokio::time::{Instant, sleep};
-use tracing::{Instrument, debug, info_span, warn};
-use werewolf_protocol::{ActRequest, JoinRequest, PlayerView, Poll, Team, Turn};
+use tokio::{
+    task::{JoinError, JoinSet},
+    time::{Instant, sleep, timeout},
+};
+use tracing::{Instrument, Span, debug, error, info_span, warn};
+use werewolf_protocol::{
+    ActRequest, ActResponse, Action, JoinRequest, PlayerView, Poll, StakeInfo, StakeJoin, Team,
+    Turn,
+};
 
 const RETRY_BASE: Duration = Duration::from_millis(500);
 const RETRY_CAP: Duration = Duration::from_secs(10);
@@ -23,6 +32,8 @@ const OUTAGE_GIVE_UP: Duration = Duration::from_secs(120);
 const MAX_TURN_MS: u64 = 3_600_000;
 /// Pause before re-polling when the server re-offers a turn we already answered, so we don't spin.
 const ANSWERED_TURN_PAUSE: Duration = Duration::from_secs(1);
+/// A staked target move without a valid receipt by then is forced on-chain.
+const RECEIPT_WAIT: Duration = Duration::from_secs(5);
 
 pub struct Player {
     client: GameClient,
@@ -31,6 +42,16 @@ pub struct Player {
     model: String,
     /// 0 plays forever.
     games: u32,
+    /// Set for staked games.
+    wallet: Option<Wallet>,
+    /// Testing: send staked target moves only through `forceAction`.
+    force_moves: bool,
+    /// The staked seat in the current game.
+    seat: Option<Seat>,
+    /// The last staked game we finished, which the server keeps showing until the next lobby.
+    finished: Option<U256>,
+    /// Watchtowers and forced moves.
+    background: JoinSet<()>,
 }
 
 /// Why a session (one join token) stopped.
@@ -43,24 +64,78 @@ enum SessionEnd {
     TokenRejected,
 }
 
+/// What became of one act.
+enum Delivered {
+    Accepted(ActResponse),
+    /// Stale, rejected, or past the deadline; already logged.
+    Refused,
+    /// No answer within [`RECEIPT_WAIT`].
+    TimedOut,
+    Ended(SessionEnd),
+}
+
+#[derive(Debug, thiserror::Error)]
+enum JoinFailure {
+    #[error(transparent)]
+    Http(#[from] HttpError),
+    #[error("staked seat: {0}")]
+    Stake(#[from] StakeError),
+}
+
+impl JoinFailure {
+    fn is_retryable(&self) -> bool {
+        match self {
+            // 409 means a game is in progress; the next lobby will accept us.
+            Self::Http(error) => {
+                error.is_retryable() || error.status() == Some(StatusCode::CONFLICT)
+            }
+            Self::Stake(error) => error.is_retryable(),
+        }
+    }
+
+    fn class(&self) -> &'static str {
+        match self {
+            Self::Http(error) => error.class(),
+            Self::Stake(error) => error.class(),
+        }
+    }
+}
+
 impl Player {
-    pub const fn new(
-        client: GameClient,
-        brain: Brain,
-        name: String,
-        model: String,
-        games: u32,
-    ) -> Self {
+    pub fn new(client: GameClient, brain: Brain, name: String, model: String, games: u32) -> Self {
         Self {
             client,
             brain,
             name,
             model,
             games,
+            wallet: None,
+            force_moves: false,
+            seat: None,
+            finished: None,
+            background: JoinSet::new(),
         }
     }
 
+    /// Enables staked games, which need a wallet.
+    pub fn with_wallet(self, wallet: Wallet, force_moves: bool) -> Self {
+        Self {
+            wallet: Some(wallet),
+            force_moves,
+            ..self
+        }
+    }
+
+    /// Plays, then waits for every watchtower so no payout is left unclaimed.
     pub async fn run(mut self) -> anyhow::Result<()> {
+        let result = self.play_games().await;
+        while let Some(done) = self.background.join_next().await {
+            log_background(done);
+        }
+        result
+    }
+
+    async fn play_games(&mut self) -> anyhow::Result<()> {
         let mut played = 0;
         // Shared across sessions so a server that keeps rejecting fresh tokens still hits the outage limit.
         let mut outage = Backoff::new(RETRY_BASE, RETRY_CAP, OUTAGE_GIVE_UP);
@@ -70,6 +145,13 @@ impl Player {
                 SessionEnd::Finished { winner, view } => {
                     played += 1;
                     print_result(&self.name, winner, &view);
+                    if let Some(seat) = self.seat.take() {
+                        self.finished = Some(seat.terms.game_id());
+                        self.watch(seat);
+                    }
+                    while let Some(done) = self.background.try_join_next() {
+                        log_background(done);
+                    }
                     if self.games != 0 && played >= self.games {
                         return Ok(());
                     }
@@ -93,21 +175,15 @@ impl Player {
     }
 
     /// Returns a bearer token, waiting out a server that is down or mid-game.
-    async fn join(&self) -> anyhow::Result<String> {
-        let request = JoinRequest {
-            name: self.name.clone(),
-            model: Some(self.model.clone()),
-            human: false,
-        };
+    async fn join(&mut self) -> anyhow::Result<String> {
         let mut backoff = Backoff::new(RETRY_BASE, RETRY_CAP, JOIN_GIVE_UP);
         loop {
-            let error = match self.client.join(&request).await {
-                Ok(joined) => return Ok(joined.token),
+            let error = match self.try_join().await {
+                Ok(token) => return Ok(token),
                 Err(error) => error,
             };
-            // 409 means a game is in progress; the next lobby will accept us.
-            if !error.is_retryable() && error.status() != Some(StatusCode::CONFLICT) {
-                bail!("server at {} refused the join: {error}", self.client.base());
+            if !error.is_retryable() {
+                bail!("could not join {}: {error}", self.client.base());
             }
             let Some(delay) = backoff.next_delay() else {
                 bail!(
@@ -119,6 +195,69 @@ impl Player {
             warn!(attempt = backoff.attempt(), error_class = error.class(), %error, "join failed; retrying");
             sleep(delay).await;
         }
+    }
+
+    async fn try_join(&mut self) -> Result<String, JoinFailure> {
+        let info = self.client.info().await?;
+        let stake = match &info.stake {
+            Some(stake) => Some(self.stake(stake).await?),
+            None => None,
+        };
+        let request = JoinRequest {
+            name: self.name.clone(),
+            model: Some(self.model.clone()),
+            human: false,
+            stake,
+        };
+        let joined = self.client.join(&request).await?;
+        if let Some(seat) = &self.seat
+            && seat.seat != joined.player_id
+        {
+            error!(
+                seat = seat.seat,
+                player_id = joined.player_id,
+                "server gave us a different seat than the escrow; our signatures will not verify"
+            );
+        }
+        Ok(joined.token)
+    }
+
+    /// Takes or resumes a staked seat and returns the join proof.
+    async fn stake(&mut self, info: &StakeInfo) -> Result<StakeJoin, StakeError> {
+        let terms = Terms::parse(info)?;
+        let game_id = terms.game_id();
+        if self.finished == Some(game_id) {
+            return Err(StakeError::NotOpen(format!(
+                "game {game_id} is over; waiting for the next lobby"
+            )));
+        }
+        let Some(wallet) = &mut self.wallet else {
+            return Err(StakeError::Setup(
+                "this server runs staked games; pass --wallet-key-file".into(),
+            ));
+        };
+        let chain = wallet.connect(&terms).await?;
+        // A seat left behind by a server reset mid-game still has a payout to collect.
+        if let Some(old) = self.seat.take_if(|seat| seat.terms.domain != terms.domain) {
+            self.watch(old);
+        }
+        let (seat, join) = Seat::take(chain, terms).await?;
+        // A re-join after a reset keeps the receipts collected so far.
+        self.seat.get_or_insert(seat);
+        Ok(join)
+    }
+
+    fn watch(&mut self, seat: Seat) {
+        let (chain, terms, receipts) = seat.into_receipts();
+        let watch = Watch {
+            name: self.name.clone(),
+            server: self.client.clone(),
+            chain,
+            terms,
+            receipts,
+        };
+        self.background
+            .spawn(watchtower::watch(watch).instrument(Span::current()));
     }
 
     async fn play(&mut self, token: &str, outage: &mut Backoff) -> anyhow::Result<SessionEnd> {
@@ -169,43 +308,136 @@ impl Player {
             turn_id: turn.turn_id,
             action: decision.action,
             reasoning: decision.reasoning,
+            log_hash: None,
+            signature: None,
         };
+        // Only staked target turns have a round to force.
+        let round = turn.round.filter(|_| self.seat.is_some());
+        if let Some(round) = round
+            && self.force_moves
+        {
+            self.force(round, &request.action, "testing --force-moves");
+            return Ok(None);
+        }
+        self.sign(&turn, &mut request)?;
+        let delivery = self.deliver(token, &turn, &mut request, deadline, outage);
+        let delivered = match round {
+            Some(_) => timeout(RECEIPT_WAIT, delivery)
+                .await
+                .unwrap_or(Ok(Delivered::TimedOut))?,
+            None => delivery.await?,
+        };
+        let Some(seat) = &mut self.seat else {
+            return Ok(delivered.into_end());
+        };
+        let checked = match &delivered {
+            Delivered::Accepted(ActResponse {
+                receipt: Some(receipt),
+            }) => Some(seat.keep_receipt(&turn, &request.action, receipt)),
+            _ => None,
+        };
+        let failure = match (checked, &delivered) {
+            (Some(Ok(())), _) => None,
+            (Some(Err(error)), _) => Some(error.to_string()),
+            // Passes and rate-limited chat get no receipt, and chat can't be forced.
+            (None, _) if round.is_none() => None,
+            (None, Delivered::Accepted(_)) => Some("accepted without a receipt".to_owned()),
+            (None, Delivered::TimedOut) => {
+                Some(format!("no answer within {}s", RECEIPT_WAIT.as_secs()))
+            }
+            (None, Delivered::Refused | Delivered::Ended(_)) => {
+                Some("the server did not take it".to_owned())
+            }
+        };
+        match (failure, round) {
+            (Some(failure), Some(round)) => self.force(round, &request.action, &failure),
+            (Some(failure), None) => {
+                warn!(error_class = "bad_receipt", %failure, "operator's chat receipt does not check out")
+            }
+            (None, _) => {}
+        }
+        Ok(delivered.into_end())
+    }
+
+    /// Sends `request` until the server takes it, refuses it, or the session ends.
+    async fn deliver(
+        &mut self,
+        token: &str,
+        turn: &Turn,
+        request: &mut ActRequest,
+        deadline: Instant,
+        outage: &mut Backoff,
+    ) -> anyhow::Result<Delivered> {
         let fallback = Decision::fallback(turn.kind).action;
         loop {
-            let error = match self.client.act(token, &request).await {
-                Ok(()) => {
+            let error = match self.client.act(token, request).await {
+                Ok(response) => {
                     outage.reset();
-                    return Ok(None);
+                    return Ok(Delivered::Accepted(response));
                 }
                 Err(error) => error,
             };
             match error.status() {
-                Some(StatusCode::UNAUTHORIZED) => return Ok(Some(SessionEnd::TokenRejected)),
+                Some(StatusCode::UNAUTHORIZED) => {
+                    return Ok(Delivered::Ended(SessionEnd::TokenRejected));
+                }
                 // Chat windows routinely close while the model is still thinking.
                 Some(StatusCode::CONFLICT) if is_speak(turn.kind) => {
                     debug!(error_class = "stale_turn", %error, "chat window closed before our message landed");
-                    return Ok(None);
+                    return Ok(Delivered::Refused);
                 }
                 Some(StatusCode::CONFLICT) => {
                     warn!(error_class = "stale_turn", %error, "turn already closed; polling again");
-                    return Ok(None);
+                    return Ok(Delivered::Refused);
                 }
                 // The turn stays open after a 422; answer with the always-valid default so the table isn't held up.
                 Some(StatusCode::UNPROCESSABLE_ENTITY) if request.action != fallback => {
                     warn!(error_class = error.class(), %error, "server rejected our action; sending fallback");
                     request.action = fallback.clone();
+                    self.sign(turn, request)?;
                 }
                 _ if !error.is_retryable() => {
                     warn!(error_class = error.class(), %error, "server rejected our action; polling again");
-                    return Ok(None);
+                    return Ok(Delivered::Refused);
                 }
                 _ if Instant::now() >= deadline => {
                     warn!(error_class = error.class(), %error, "could not deliver action before the deadline");
-                    return Ok(None);
+                    return Ok(Delivered::Refused);
                 }
                 _ => pause(outage, "act", &error).await?,
             }
         }
+    }
+
+    /// Signs `request` in staked games.
+    fn sign(&mut self, turn: &Turn, request: &mut ActRequest) -> anyhow::Result<()> {
+        if let Some(seat) = &mut self.seat {
+            seat.sign(turn, request).context("signing our action")?;
+        }
+        Ok(())
+    }
+
+    /// Forces `action` on-chain in the background, so a slow chain doesn't stall play.
+    fn force(&mut self, round: u32, action: &Action, reason: &str) {
+        let Some(seat) = &self.seat else { return };
+        warn!(game_id = %seat.terms.game_id(), round, seat = seat.seat, reason, "no valid receipt; forcing the move on-chain");
+        let forced = seat.force(round, action.clone());
+        self.background.spawn(forced.instrument(Span::current()));
+    }
+}
+
+impl Delivered {
+    fn into_end(self) -> Option<SessionEnd> {
+        match self {
+            Self::Ended(end) => Some(end),
+            Self::Accepted(_) | Self::Refused | Self::TimedOut => None,
+        }
+    }
+}
+
+fn log_background(done: Result<(), JoinError>) {
+    if let Err(error) = done {
+        error!(%error, "background task panicked");
     }
 }
 
@@ -288,6 +520,8 @@ mod tests {
         };
         let turn = Turn {
             turn_id: 1,
+            step: 0,
+            round: None,
             kind,
             candidates: if kind == TurnKind::DayVote {
                 vec![1]
@@ -299,6 +533,20 @@ mod tests {
         };
         let polls = Arc::new(AtomicUsize::new(0));
         let app = Router::new()
+            .route(
+                "/v1/info",
+                get(|| async {
+                    Json(json!({
+                        "version": 1,
+                        "play_url": "http://fake/play",
+                        "settings": {
+                            "wolves": null, "sheriff": true, "cupid": true,
+                            "discussion_secs": 120, "ai_chat_cooldown_secs": 15,
+                            "ai_max_chat_messages": 3, "human_turn_timeout_secs": 60
+                        }
+                    }))
+                }),
+            )
             .route(
                 "/v1/join",
                 post(|| async {

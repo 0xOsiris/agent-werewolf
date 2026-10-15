@@ -2,12 +2,10 @@
 
 use std::{num::NonZeroUsize, ops::RangeInclusive, time::Duration};
 
-use serde::{Deserialize, Serialize};
+use werewolf_engine::{Setup, describe_setup, players_needed};
+use werewolf_protocol::SettingsBody;
 
-use crate::{
-    config::Config,
-    engine::{Setup, describe_setup, players_needed},
-};
+use crate::config::Config;
 
 /// Settings in force for the next game. CLI values may be fractional, so times stay exact here.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -17,19 +15,6 @@ pub struct Settings {
     pub ai_chat_cooldown: Duration,
     pub ai_max_chat_messages: u32,
     pub human_turn_timeout: Duration,
-}
-
-/// Wire form for `/admin/settings`, snapshots, and `/v1/info`: whole seconds.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct SettingsBody {
-    pub wolves: Option<u32>,
-    pub sheriff: bool,
-    pub cupid: bool,
-    pub discussion_secs: u32,
-    pub ai_chat_cooldown_secs: u32,
-    pub ai_max_chat_messages: u32,
-    pub human_turn_timeout_secs: u32,
 }
 
 const WOLVES: RangeInclusive<u32> = 1..=3;
@@ -42,7 +27,7 @@ impl Settings {
     pub fn from_config(config: &Config) -> Self {
         Self {
             setup: Setup {
-                wolves: config.wolves,
+                wolves: config.wolves(),
                 sheriff: config.sheriff(),
                 cupid: config.cupid(),
             },
@@ -68,11 +53,9 @@ impl Settings {
             human_turn_timeout_secs: secs(self.human_turn_timeout),
         }
     }
-}
 
-impl SettingsBody {
     /// Checks every field's range and that `max_players` seats can hold the setup.
-    pub fn validate(self, max_players: usize) -> Result<Settings, String> {
+    pub fn from_body(body: SettingsBody, max_players: usize) -> Result<Self, String> {
         let check = |name: &str, value: u32, range: RangeInclusive<u32>| {
             if range.contains(&value) {
                 Ok(value)
@@ -84,32 +67,32 @@ impl SettingsBody {
                 ))
             }
         };
-        if let Some(wolves) = self.wolves
+        if let Some(wolves) = body.wolves
             && !WOLVES.contains(&wolves)
         {
             return Err(format!("wolves must be null or 1-3, got {wolves}"));
         }
-        let discussion = check("discussion_secs", self.discussion_secs, DISCUSSION_SECS)?;
+        let discussion = check("discussion_secs", body.discussion_secs, DISCUSSION_SECS)?;
         let cooldown = check(
             "ai_chat_cooldown_secs",
-            self.ai_chat_cooldown_secs,
+            body.ai_chat_cooldown_secs,
             AI_CHAT_COOLDOWN_SECS,
         )?;
         let messages = check(
             "ai_max_chat_messages",
-            self.ai_max_chat_messages,
+            body.ai_max_chat_messages,
             AI_MAX_CHAT_MESSAGES,
         )?;
         let timeout = check(
             "human_turn_timeout_secs",
-            self.human_turn_timeout_secs,
+            body.human_turn_timeout_secs,
             HUMAN_TURN_TIMEOUT_SECS,
         )?;
-        let wolves = self.wolves.and_then(|w| NonZeroUsize::new(w as usize));
+        let wolves = body.wolves.and_then(|w| NonZeroUsize::new(w as usize));
         if let Some(wolves) = wolves {
-            let need = players_needed(wolves.get(), self.sheriff, self.cupid);
+            let need = players_needed(wolves.get(), body.sheriff, body.cupid);
             if need > max_players {
-                let setup = describe_setup(wolves.get(), self.sheriff, self.cupid);
+                let setup = describe_setup(wolves.get(), body.sheriff, body.cupid);
                 return Err(format!(
                     "{setup} need {need} players, but --max-players is {max_players}"
                 ));
@@ -118,8 +101,8 @@ impl SettingsBody {
         Ok(Settings {
             setup: Setup {
                 wolves,
-                sheriff: self.sheriff,
-                cupid: self.cupid,
+                sheriff: body.sheriff,
+                cupid: body.cupid,
             },
             discussion: Duration::from_secs(discussion.into()),
             ai_chat_cooldown: Duration::from_secs(cooldown.into()),
@@ -145,7 +128,7 @@ mod tests {
 
     #[test]
     fn round_trips_valid_settings() {
-        let settings = VALID.validate(12).unwrap();
+        let settings = Settings::from_body(VALID, 12).unwrap();
         assert_eq!(settings.body(), VALID);
         assert_eq!(settings.setup.wolves, NonZeroUsize::new(2));
     }
@@ -204,25 +187,29 @@ mod tests {
             ),
         ];
         for (body, field) in cases {
-            let err = body.validate(12).unwrap_err();
+            let err = Settings::from_body(body, 12).unwrap_err();
             assert!(err.starts_with(field), "{err}");
         }
         assert!(
-            SettingsBody {
-                wolves: None,
-                ..VALID
-            }
-            .validate(12)
+            Settings::from_body(
+                SettingsBody {
+                    wolves: None,
+                    ..VALID
+                },
+                12
+            )
             .is_ok()
         );
         let err = |wolves, sheriff, cupid, max_players| {
-            SettingsBody {
-                wolves: Some(wolves),
-                sheriff,
-                cupid,
-                ..VALID
-            }
-            .validate(max_players)
+            Settings::from_body(
+                SettingsBody {
+                    wolves: Some(wolves),
+                    sheriff,
+                    cupid,
+                    ..VALID
+                },
+                max_players,
+            )
             .err()
         };
         assert_eq!(

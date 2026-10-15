@@ -127,6 +127,8 @@ mod tests {
     fn vote_turn() -> Turn {
         Turn {
             turn_id: 5,
+            step: 0,
+            round: None,
             kind: TurnKind::DayVote,
             candidates: vec![2, 3],
             deadline_ms: 0,

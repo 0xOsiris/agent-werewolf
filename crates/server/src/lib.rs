@@ -4,7 +4,6 @@ mod assets;
 mod chat;
 mod config;
 mod driver;
-mod engine;
 mod error;
 mod game_log;
 mod http;
@@ -13,6 +12,7 @@ mod sanitize;
 mod settings;
 mod site;
 mod spectator;
+mod stake;
 mod state;
 
 use anyhow::Context;
@@ -39,6 +39,14 @@ pub async fn serve(
         None => SysRng.try_next_u64().context("generating seed")?,
     };
     let site = site::Site::new(&config, addr)?;
+    let stake = match config.stake_config()? {
+        Some(stake) => Some(
+            stake::Stake::connect(stake)
+                .await
+                .context("connecting to the escrow")?,
+        ),
+        None => None,
+    };
     println!("spectate: {}/?key={key}  (seed {seed})", site.base_url);
 
     let mdns = if config.no_mdns {
@@ -46,7 +54,8 @@ pub async fn serve(
     } else {
         mdns::advertise(addr.port())
     };
-    let app = state::AppState::new(config, key, seed, site, shutdown.clone());
+    let app = state::AppState::new(config, key, seed, site, shutdown.clone(), stake);
+    app.open_lobby();
     let served = axum::serve(listener, http::router(app))
         .with_graceful_shutdown(shutdown.cancelled_owned())
         .await

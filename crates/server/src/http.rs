@@ -10,7 +10,7 @@ use axum::{
         rejection::QueryRejection,
     },
     http::{
-        HeaderMap,
+        HeaderMap, StatusCode,
         header::{AUTHORIZATION, CONTENT_TYPE},
         request::Parts,
     },
@@ -25,13 +25,14 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::sync::broadcast::{Receiver, error::RecvError};
 use tracing::{error, warn};
 use werewolf_protocol::{
-    ActRequest, JoinRequest, JoinResponse, PROTOCOL_VERSION, Poll, PublicEvent, Role,
+    ActRequest, ActResponse, ApiError, Info, JoinRequest, JoinResponse, PROTOCOL_VERSION, Poll,
+    PublicEvent, Role, SettingsBody,
 };
+use werewolf_verify::alloy_primitives::U256;
 
 use crate::{
     assets,
     error::HttpError,
-    settings::SettingsBody,
     spectator::{Broadcast, SpectatorEvent, Viewer},
     state::{AppState, Subscription, Watcher},
 };
@@ -48,7 +49,9 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/static/{*path}", get(static_file))
         .route("/qr.svg", get(qr))
         .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
         .route("/v1/info", get(info))
+        .route("/v1/transcript", get(transcript))
         .route("/v1/join", post(join))
         .route("/v1/poll", get(poll))
         .route("/v1/act", post(act))
@@ -76,30 +79,67 @@ async fn qr(State(app): State<Arc<AppState>>) -> Response {
     ([(CONTENT_TYPE, "image/svg+xml")], svg).into_response()
 }
 
-#[derive(Serialize)]
-struct Info {
-    version: u32,
-    play_url: String,
-    settings: SettingsBody,
-}
-
 async fn info(State(app): State<Arc<AppState>>) -> Json<Info> {
     Json(Info {
         version: PROTOCOL_VERSION,
         play_url: app.site().play_url.clone(),
         settings: app.settings(),
+        stake: app.stake_info(),
     })
 }
 
+/// Liveness only: the process serves HTTP.
 async fn healthz() -> &'static str {
     "ok"
+}
+
+/// Readiness: staked games also need the chain RPC.
+async fn readyz(State(app): State<Arc<AppState>>) -> Response {
+    match app.ready().await {
+        Ok(()) => "ok".into_response(),
+        Err(error) => (StatusCode::SERVICE_UNAVAILABLE, Json(ApiError { error })).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct TranscriptQuery {
+    /// Decimal; the latest game if absent.
+    game_id: Option<String>,
+}
+
+async fn transcript(
+    State(app): State<Arc<AppState>>,
+    query: Result<Query<TranscriptQuery>, QueryRejection>,
+) -> Result<Response, HttpError> {
+    let Query(query) = query?;
+    // Parsed to an integer here, so only its decimal form ever reaches a file path.
+    let id = match query.game_id.as_deref() {
+        None => None,
+        Some(id) if !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()) => {
+            Some(U256::from_str_radix(id, 10).map_err(|_| bad_game_id())?)
+        }
+        Some(_) => return Err(bad_game_id()),
+    };
+    let json = app.transcript(id).await?;
+    Ok(([(CONTENT_TYPE, "application/json")], json.to_vec()).into_response())
+}
+
+fn bad_game_id() -> HttpError {
+    HttpError::Rejected {
+        status: StatusCode::BAD_REQUEST,
+        message: "game_id must be a decimal game id".to_owned(),
+    }
 }
 
 async fn join(
     State(app): State<Arc<AppState>>,
     JsonBody(req): JsonBody<JoinRequest>,
 ) -> Result<Json<JoinResponse>, HttpError> {
-    app.join(req).map(Json)
+    if app.config().is_staked() {
+        app.join_staked(req).await.map(Json)
+    } else {
+        app.join(req).map(Json)
+    }
 }
 
 #[derive(Deserialize)]
@@ -121,9 +161,10 @@ async fn act(
     State(app): State<Arc<AppState>>,
     Bearer(token): Bearer,
     body: Result<JsonBody<ActRequest>, HttpError>,
-) -> Result<Json<Empty>, HttpError> {
-    app.act(&token, body.map(|JsonBody(req)| req))?;
-    Ok(Json(Empty {}))
+) -> Result<Json<ActResponse>, HttpError> {
+    app.act(&token, body.map(|JsonBody(req)| req))
+        .await
+        .map(Json)
 }
 
 async fn admin_start(
@@ -131,7 +172,7 @@ async fn admin_start(
     headers: HeaderMap,
 ) -> Result<Json<Empty>, HttpError> {
     app.check_key(admin_key(&headers))?;
-    app.start()?;
+    app.start().await?;
     Ok(Json(Empty {}))
 }
 

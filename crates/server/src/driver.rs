@@ -3,57 +3,166 @@
 use std::{sync::Arc, time::Duration};
 
 use tokio::time::Instant;
+use tracing::error;
+use werewolf_engine::{Answer, Game, GameEvent, TurnSpec};
 use werewolf_protocol::{Action, PlayerId, PrivateEvent, PublicEvent, TurnKind};
+use werewolf_verify::{Transcript, transcript::BuildError};
 
 use crate::{
     chat::ChatWindow,
-    engine::{Game, GameEvent, TurnSpec},
     game_log,
     spectator::SpectatorEvent,
+    stake::{self, During, Failure, OnChain, OpCursor, Stake},
     state::{AppState, Collected, millis},
 };
 
 /// Salts the chat jitter seed so it doesn't replay the engine's random stream.
 const CHAT_SALT: u64 = u64::from_be_bytes(*b"chatjitr");
 
-pub(crate) async fn run(app: Arc<AppState>, mut game: Game, seed: u64) {
-    pause(&app).await;
-    let mut windows: u64 = 0;
-    while !game.is_over() {
-        if let Some(kind) = game.chat() {
-            let chat_seed = (seed ^ CHAT_SALT).wrapping_add(windows);
-            windows += 1;
-            if !run_chat(&app, &mut game, kind, chat_seed).await {
-                return;
+/// A staked game's chain side, owned by its driver.
+pub(crate) struct Staked {
+    pub stake: Arc<Stake>,
+    pub game: Arc<OnChain>,
+    pub cursor: OpCursor,
+}
+
+pub(crate) async fn run(app: Arc<AppState>, mut game: Game, seed: u64, mut staked: Option<Staked>) {
+    match play(&app, &mut game, seed, staked.as_mut()).await {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(failure) => {
+            match &staked {
+                Some(staked) => app.halt(&staked.game, &failure),
+                None => error!(%failure, "game stopped"),
             }
-            continue;
-        }
-        let turns = game.turns();
-        app.begin_turns(&game, &turns);
-        if !app.wait_for_answers(&turns).await {
             return;
         }
-        let mut answers = Vec::with_capacity(turns.len());
-        let mut monologues = Vec::new();
-        for collected in app.collect_answers(&turns) {
-            if let Some(text) = collected.reasoning {
-                monologues.push((collected.answer.player, collected.kind, text));
-            }
-            answers.push(collected.answer);
-        }
-        let events = game.submit(&answers);
-        publish(&app, &turns, events, monologues).await;
     }
 
     let (summary, path) = app.summary(&game, seed);
     if let Some(path) = path {
         game_log::write_summary(&path, &summary).await;
     }
+    // Taken before `finish`, after which a reset may clear the lobby.
+    let transcript = app.finish_transcript(&game);
     app.finish(&game);
+    if let (Some(staked), Some(transcript)) = (staked, transcript)
+        && let Err(failure) = conclude(&app, &staked, transcript).await
+    {
+        app.halt(&staked.game, &failure);
+    }
+}
+
+/// Plays until the game is over. False on shutdown.
+async fn play(
+    app: &AppState,
+    game: &mut Game,
+    seed: u64,
+    mut staked: Option<&mut Staked>,
+) -> Result<bool, Failure> {
+    pause(app).await;
+    let mut windows: u64 = 0;
+    while !game.is_over() {
+        if let Some(kind) = game.chat() {
+            let chat_seed = (seed ^ CHAT_SALT).wrapping_add(windows);
+            windows += 1;
+            let step = app.begin_chat(kind);
+            if !run_chat(app, game, kind, step, chat_seed, staked.as_deref()).await? {
+                return Ok(false);
+            }
+            continue;
+        }
+        let turns = game.turns();
+        let (step, round) = app.begin_round();
+        app.begin_turns(game, &turns, step, round);
+        if !app.wait_for_answers(&turns).await {
+            return Ok(false);
+        }
+        let mut answers = Vec::with_capacity(turns.len());
+        let mut monologues = Vec::new();
+        for mut collected in app.collect_answers(&turns) {
+            if let Some(text) = collected.reasoning.take() {
+                monologues.push((collected.answer.player, collected.kind, text));
+            }
+            answers.push(collected);
+        }
+        let answers = match staked.as_deref_mut() {
+            Some(staked) => settle_round(app, staked, round, answers).await?,
+            None => answers.into_iter().map(|c| c.answer).collect(),
+        };
+        let events = game.submit(&answers);
+        app.extend_log(&events).during("public log")?;
+        publish(app, &turns, events, monologues).await;
+    }
+    Ok(true)
+}
+
+/// Checkpoints `round`, merges in its forced moves, and records it in the transcript.
+async fn settle_round(
+    app: &AppState,
+    staked: &mut Staked,
+    round: u32,
+    collected: Vec<Collected>,
+) -> Result<Vec<Answer>, Failure> {
+    let forces = staked
+        .stake
+        .checkpoint(&staked.game, round, &mut staked.cursor)
+        .await
+        .during("checkpoint")?;
+    let answers: Vec<(PlayerId, Option<(Action, stake::Signed)>)> = collected
+        .into_iter()
+        .map(|c| (c.answer.player, c.answer.action.zip(c.signed)))
+        .collect();
+    let applied = app
+        .record_round(round, &forces, &answers, staked.game.enc_secret())
+        .during("transcript")?;
+    Ok(answers
+        .iter()
+        .zip(applied)
+        .map(|(&(player, _), action)| Answer { player, action })
+        .collect())
+}
+
+/// Saves and serves the transcript, then proposes the result on-chain.
+async fn conclude(
+    app: &AppState,
+    staked: &Staked,
+    transcript: Result<Transcript, BuildError>,
+) -> Result<(), Failure> {
+    let transcript = transcript.during("transcript")?;
+    let json: Arc<[u8]> = serde_json::to_vec(&transcript).during("transcript")?.into();
+    stake::write_atomic(&staked.game.transcript_path, &json)
+        .await
+        .during("saving the transcript")?;
+    app.set_transcript(json);
+    let uri = format!(
+        "{}/v1/transcript?game_id={}",
+        app.site().base_url,
+        staked.game.id
+    );
+    let result = transcript.result;
+    staked
+        .stake
+        .propose(
+            &staked.game,
+            result.winner_team,
+            result.winners,
+            result.transcript_root,
+            uri,
+        )
+        .await
+        .during("propose")
 }
 
 /// Runs one open chat window until it times out or goes quiet. False on shutdown.
-async fn run_chat(app: &AppState, game: &mut Game, kind: TurnKind, seed: u64) -> bool {
+async fn run_chat(
+    app: &AppState,
+    game: &mut Game,
+    kind: TurnKind,
+    step: u32,
+    seed: u64,
+    staked: Option<&Staked>,
+) -> Result<bool, Failure> {
     let players: Vec<PlayerId> = game.turns().iter().map(|t| t.player).collect();
     let length = app.chat_length(kind);
     let mut window = ChatWindow::open(
@@ -71,50 +180,71 @@ async fn run_chat(app: &AppState, game: &mut Game, kind: TurnKind, seed: u64) ->
     loop {
         let now = Instant::now();
         for collected in app.take_answers(kind, &players) {
-            post(app, game, &mut window, collected, now);
+            post(app, game, &mut window, collected, now, staked)?;
         }
         if window.should_close(now) {
             break;
         }
         let due = window.due(now);
         if !due.is_empty() {
-            app.issue_chat_turns(game, kind, &due, window.ends());
+            app.issue_chat_turns(game, kind, step, &due, window.ends());
         }
         if !app.wait_for_answer(window.next_wake()).await {
-            return false;
+            return Ok(false);
         }
     }
     for collected in app.cancel_chat(kind, &players) {
-        post(app, game, &mut window, collected, Instant::now());
+        post(app, game, &mut window, collected, Instant::now(), staked)?;
     }
     app.publish(SpectatorEvent::ChatWindow {
         kind,
         open: false,
         ends_in_ms: 0,
     });
-    for event in game.close_chat() {
+    let events = game.close_chat();
+    app.extend_log(&events).during("public log")?;
+    for event in events {
         app.publish(event.into());
     }
-    true
+    Ok(true)
 }
 
-/// Publishes a chat answer right away, unpaced, followed by its reasoning.
+/// Publishes a chat answer right away, unpaced, followed by its reasoning. A staked post enters
+/// the transcript and its receipt goes back to the waiting act.
 fn post(
     app: &AppState,
     game: &mut Game,
     window: &mut ChatWindow,
     collected: Collected,
     now: Instant,
-) {
+    staked: Option<&Staked>,
+) -> Result<(), Failure> {
     let player = collected.answer.player;
     let text = match &collected.answer.action {
         Some(Action::Speak { text }) => text.as_str(),
         _ => "",
     };
+    let mut receipt = None;
     if window.answer(player, text.trim().is_empty(), now) {
-        for event in game.speak(player, text) {
+        if let (Some(staked), Some(signed)) = (staked, &collected.signed) {
+            app.record_message(player, text, signed)
+                .during("transcript")?;
+            receipt = Some(
+                staked
+                    .stake
+                    .receipt(player, signed)
+                    .during("signing a receipt")?,
+            );
+        }
+        let events = game.speak(player, text);
+        app.extend_log(&events).during("public log")?;
+        for event in events {
             app.publish(event.into());
         }
+    }
+    if let Some(reply) = collected.reply {
+        // Fails only if the act stopped waiting; the message is recorded either way.
+        let _ = reply.send(receipt);
     }
     if let Some(text) = collected.reasoning {
         app.publish(SpectatorEvent::Reasoning {
@@ -123,6 +253,7 @@ fn post(
             text,
         });
     }
+    Ok(())
 }
 
 /// Publishes events one at a time, each followed by its actor's reasoning and a pause.
@@ -173,8 +304,9 @@ async fn pause(app: &AppState) {
 
 #[cfg(test)]
 mod tests {
+    use werewolf_engine::Audience;
+
     use super::*;
-    use crate::engine::Audience;
 
     #[test]
     fn reasoning_follows_the_event_its_actor_caused() {
