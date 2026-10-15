@@ -18,6 +18,14 @@ const SILENT_ACTION = {
   wolf_kill: "Wants to spare everyone",
   seer_inspect: "Checks no one",
   doctor_protect: "Protects no one",
+  sheriff_shoot: "Holds fire",
+};
+
+const DEATH_HOW = {
+  night: " was killed in the night",
+  vote: " was eliminated by vote",
+  shot: " was shot by the sheriff",
+  backfire: " died from their own misfire",
 };
 
 /** Card colour and tag for a reasoning-only card, by turn kind. */
@@ -26,6 +34,7 @@ const KIND_CONTEXT = {
   wolf_kill: ["wolves", "wolves only"],
   seer_inspect: ["seer", "private"],
   doctor_protect: ["doctor", "private"],
+  sheriff_shoot: ["sheriff", "private"],
 };
 
 /**
@@ -133,8 +142,11 @@ export class Feed {
           ? name(ev.voter) + " abstained"
           : name(ev.voter) + " voted for " + name(ev.target)), ev.voter);
         break;
+      case "shot":
+        this.append(this.line("msg sheriff", "Sheriff " + name(ev.sheriff) + " shot " + name(ev.target) + "!"), ev.sheriff);
+        break;
       case "died": {
-        const how = ev.cause === "night" ? " was killed in the night" : " was eliminated by vote";
+        const how = DEATH_HOW[ev.cause] || " died";
         this.append(el("div", "divider death", name(ev.player) + how + " — " + (ROLE_LABEL[ev.role] || ev.role)));
         break;
       }
@@ -201,6 +213,9 @@ export class Feed {
           + (ev.is_werewolf ? "WEREWOLF" : "not a werewolf"), "private"), seer);
         return true;
       }
+      case "shot":
+        this.append(this.card("sheriff", ev.sheriff, "Does", "Shoots " + name(ev.target)), ev.sheriff);
+        return true;
       case "protected": {
         const doc = this.game.holder("doctor");
         if (doc === undefined) return false;

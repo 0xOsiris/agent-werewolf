@@ -1,6 +1,7 @@
 //! Agent Werewolf game server: player HTTP API, game driver, and spectator stream.
 
 mod assets;
+mod chat;
 mod config;
 mod driver;
 mod engine;

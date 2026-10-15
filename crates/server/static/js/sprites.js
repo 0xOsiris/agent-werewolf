@@ -163,6 +163,11 @@ const ACCESSORIES = [
   { name: "scarf", rows: { 12: "3.8a3.", 13: "3.8a3.", 14: "4.2a8.", 15: "4.2a8." } },
 ].map((a) => ({ ...a, grid: grid(a.rows, CHAR_W, CHAR_H) }));
 
+// Sheriff look: wide-brim cowboy hat and a tin star on the chest.
+const COWBOY_HAT = grid({ 0: "4.6k4.", 1: "4.6k4.", 2: "k3.6K3.k", 3: "14k" }, CHAR_W, CHAR_H);
+const TIN_STAR = grid({ 13: "5.y8.", 14: "4.3y7.", 15: "5.y8." }, CHAR_W, CHAR_H);
+const KEEPS_UNDER_HAT = new Set(["none", "beard", "glasses", "scarf"]);
+
 const SKINS = ["#ffd6b0", "#f1c27d", "#d9a066", "#b5774a", "#8d5524", "#ffe2cc"];
 const HAIRS = ["#3b2416", "#6b3e26", "#e8c547", "#b0392b", "#2b2b33", "#d4d4e0", "#7b4fa8"];
 const SHIRTS = [
@@ -225,10 +230,18 @@ export function playerSprites(id) {
   const wolfIdle = grid(WOLF, CHAR_W, CHAR_H);
   const wolfGlow = grid({ ...WOLF, 6: "1.2f2Y4f2Y2f1." }, CHAR_W, CHAR_H);
   const wolfTalk = grid({ ...WOLF, 11: "4.f4mf4." }, CHAR_W, CHAR_H);
+  const capped = HAIR[v.hairStyle].map((row, y) => (y < 3 ? ".".repeat(CHAR_W) : row));
+  const keep = KEEPS_UNDER_HAT.has(acc.name) ? [acc.grid] : [];
+  const sheriffPal = { ...pal, k: "#8f5a3a", K: "#3e2731", y: "#ffd23f" };
+  const sheriff = (face) => buildSprite([BODY, capped, ...(acc.over ? [] : keep), COWBOY_HAT, TIN_STAR, face,
+    ...(acc.over ? keep : [])], sheriffPal);
   return {
     idle: human(FACES.idle),
     blink: human(FACES.blink),
     talk: human(FACES.talk),
+    sheriffIdle: sheriff(FACES.idle),
+    sheriffBlink: sheriff(FACES.blink),
+    sheriffTalk: sheriff(FACES.talk),
     wolf: buildSprite([wolfIdle], wolfPal),
     wolfGlow: buildSprite([wolfGlow], wolfPal),
     wolfTalk: buildSprite([wolfTalk], wolfPal),
@@ -270,6 +283,8 @@ function buildShared() {
     { p: "#b07cff", P: "#7a4fd0", w: "#f2e9ff", b: "#a0703c" });
   MINI.doctor = buildSprite([grid(["2.3r2.", "2.3r2.", "7r", "7r", "7r", "2.3r2.", "2.3r2."], 7, 7)],
     { r: "#3ddc97" });
+  MINI.sheriff = buildSprite([grid(["3.y3.", "2.3y2.", "7y", ".2yY2y.", ".5y.", ".2y.2y.", "y5.y"], 7, 7)],
+    { y: "#ffd23f", Y: "#b8860b" });
   MINI.villager = buildSprite([grid(["m.m.m", "m.m.m", "5m", "2.w2.", "2.w2.", "2.w2.", "2.w2."], 5, 7)],
     { m: "#d6dae8", w: "#c08040" });
   ICONS.werewolf = buildSprite([grid(["g9.g", "2g7.2g", "11g", "11g", "2gy5gy2g", "11g",
@@ -279,6 +294,9 @@ function buildShared() {
     { p: "#b07cff", P: "#7a4fd0", w: "#f2e9ff", b: "#a0703c", B: "#6b4a2a" });
   ICONS.doctor = buildSprite([grid(["3.3r3.", "3.3r3.", "3.3r3.", "9r", "9r", "9r", "3.3r3.", "3.3r3.", "3.3r3."], 9, 9)],
     { r: "#3ddc97", R: "#1f9e6a" });
+  ICONS.sheriff = buildSprite([grid(["5.y5.", "4.3y4.", "4.3y4.", "11y", "1.9y1.", "2.3yY3y2.", "2.7y2.",
+    "2.7y2.", "1.3y3.3y1.", "1.2y5.2y1.", "y9.y"], 11, 11)],
+  { y: "#ffd23f", Y: "#b8860b" });
   ICONS.villager = buildSprite([grid(["m2.m2.m", "m2.m2.m", "m2.m2.m", "7m", "3.w3.", "3.w3.", "3.w3.",
     "3.w3.", "3.w3.", "3.w3.", "3.w3."], 7, 11)],
   { m: "#d6dae8", w: "#c08040" });

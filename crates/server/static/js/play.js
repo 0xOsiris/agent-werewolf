@@ -1,22 +1,25 @@
 // Human player page: join, watch the village from your seat, and answer turns via long-poll.
 
-import { Game, connectStream, ROLE_LABEL, ROLE_GOAL } from "./events.js";
+import { Game, connectStream, ROLE_LABEL, ROLE_GOAL, rulesLine } from "./events.js";
 import { Feed, el } from "./feed.js";
-import { Scene } from "./scene.js";
+import { Scene, clock } from "./scene.js";
 import { iconCanvas } from "./sprites.js";
 
 const $ = (id) => document.getElementById(id);
 const SESSION_KEY = "werewolf.session";
 const NAME_KEY = "werewolf.name";
 const MAX_TEXT = 600;
+// Open chat: speak turns repeat during a window, with a cooldown and a per-window cap.
+const CHAT_KINDS = new Set(["day_speak", "wolf_chat"]);
+const CHAT_MAX = 6;
+const CHAT_COOLDOWN_MS = 8000;
 const PRIVATE = new Set(["wolf_spoke", "wolf_voted", "inspected", "protected"]);
 const TURN_TEXT = {
-  day_speak: ["Your turn to speak", "Everyone hears this. Accuse, defend, or bluff."],
-  wolf_chat: ["Whisper to your pack", "Only werewolves see this."],
   day_vote: ["Vote to eliminate", "Tap a player in the village or pick from the list."],
   wolf_kill: ["Pick tonight's victim (wolves only)", "Your pack's votes decide who dies."],
   seer_inspect: ["Choose someone to inspect", "You will learn whether they are a werewolf."],
   doctor_protect: ["Choose someone to protect", "If the wolves pick them tonight, they survive."],
+  sheriff_shoot: ["Sheriff: shoot or hold fire", "Hit a wolf and only they die. Hit anyone else and you die too."],
 };
 
 // ------------------------------------------------------------ storage
@@ -56,12 +59,22 @@ let rejoining = false;
 let overShown = false;
 let noticeTimer = null;
 let wakeRejoin = null;
+let chatTurn = null;
+let chatSent = 0;
+let chatLastSent = 0;
+let chatBuzzed = false;
+let chatBusy = false;
 
 const game = new Game();
 const you = () => (session ? session.player_id : null);
 const scene = new Scene($("scene"), game, { you, onPick: (id) => pick(id) });
 new Feed($("feed"), game, { filter: (ev) => !PRIVATE.has(ev.type), you, emptyText: "The village is quiet…" });
 new Feed($("private-feed"), game, { filter: (ev) => PRIVATE.has(ev.type), you, emptyText: "Nothing secret yet." });
+new Feed($("chat-log"), game, {
+  filter: (ev) => ev.type === "spoke" || ev.type === "wolf_spoke" || ev.type === "phase_started",
+  you,
+  emptyText: "No messages yet.",
+});
 $("brand").prepend(iconCanvas("werewolf", 3));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -128,7 +141,10 @@ function render() {
       ? "Your pack: " + pack.map((id) => game.nameOf(id) + (game.player(id)?.alive === false ? " (dead)" : "")).join(", ")
       : role === "werewolf" ? "You hunt alone." : "";
   }
-  $("private-card").hidden = !role || role === "villager";
+  $("private-card").hidden = !role || role === "villager" || role === "sheriff";
+  const rules = rulesLine(s.settings);
+  $("role-rules").textContent = rules ? "Rules: " + rules : "";
+  $("status-rules").textContent = rules && s.phase.kind === "lobby" ? "Rules: " + rules : "";
 
   let status = "";
   if (rejoining) status = "Waiting for the next lobby to open…";
@@ -150,9 +166,19 @@ function render() {
   }
   if (s.phase.kind === "over" && session && !overShown) showGameOver(s.winner);
   if (overShown) renderRoles();
+  renderChat();
 }
 
 game.on((ev) => {
+  if (ev.type === "chat_window") {
+    if (ev.open) {
+      chatSent = 0;
+      chatLastSent = 0;
+      chatBuzzed = false;
+    } else {
+      dropChatTurn();
+    }
+  }
   if ((ev.type === "reset" || (ev.type === "snapshot" && game.state.phase.kind === "lobby")) && wakeRejoin) wakeRejoin();
   // A reset invalidates every token; offer the join form with the name kept.
   if (ev.type === "reset" && session && !rejoining) {
@@ -303,7 +329,15 @@ async function pollLoop(gen) {
       continue;
     }
     failures = 0;
-    if (body.status === "turn") {
+    if (body.status === "turn" && CHAT_KINDS.has(body.kind)) {
+      hideTurn();
+      showChatTurn(body);
+      await new Promise((r) => {
+        chatTurn.settle = r;
+        setTimeout(r, body.deadline_ms + 1500);
+      });
+    } else if (body.status === "turn") {
+      dropChatTurn();
       if (!turn || turn.turn_id !== body.turn_id) showTurn(body);
       else turn.deadline = performance.now() + body.deadline_ms;
       await new Promise((r) => {
@@ -312,10 +346,12 @@ async function pollLoop(gen) {
       });
     } else if (body.status === "game_over") {
       hideTurn();
+      dropChatTurn();
       showGameOver(body.winner, body.view);
       return;
     } else {
       hideTurn();
+      dropChatTurn();
     }
   }
 }
@@ -327,34 +363,30 @@ function showTurn(t) {
   $("act-title").textContent = title;
   $("act-help").textContent = help;
   $("act-error").textContent = "";
-  const speaks = t.kind === "day_speak" || t.kind === "wolf_chat";
-  $("act-speak").hidden = !speaks;
-  $("act-target").hidden = speaks;
-  if (speaks) {
-    $("act-text").value = "";
-    $("act-text").placeholder = t.kind === "wolf_chat" ? "Plot with your pack…" : "Say something to the village…";
-    updateCounter();
-    scene.setPicking(null, null);
-  } else {
-    const names = new Map((t.view && t.view.players ? t.view.players : game.state.players).map((p) => [p.id, p]));
-    const buttons = t.candidates.map((id) => {
-      const p = names.get(id);
-      const b = el("button");
-      b.type = "button";
-      b.dataset.id = String(id);
-      b.appendChild(document.createTextNode(p ? p.name : "#" + id));
-      b.appendChild(el("span", "c-model", p ? (p.human ? "human" : p.model || "agent") : ""));
-      b.addEventListener("click", () => pick(id));
-      return b;
-    });
-    $("act-cands").replaceChildren(...buttons);
-    $("act-abstain").textContent = t.kind === "wolf_kill" ? "Spare everyone" : "Abstain";
-    scene.setPicking(t.candidates, null);
-  }
+  const names = new Map((t.view && t.view.players ? t.view.players : game.state.players).map((p) => [p.id, p]));
+  const buttons = t.candidates.map((id) => {
+    const p = names.get(id);
+    const b = el("button");
+    b.type = "button";
+    b.dataset.id = String(id);
+    b.appendChild(document.createTextNode(p ? p.name : "#" + id));
+    b.appendChild(el("span", "c-model", p ? (p.human ? "human" : p.model || "agent") : ""));
+    b.addEventListener("click", () => pick(id));
+    return b;
+  });
+  $("act-cands").replaceChildren(...buttons);
+  const shoot = t.kind === "sheriff_shoot";
+  $("action").classList.toggle("shoot", shoot);
+  $("act-abstain").textContent = shoot ? "Hold fire" : t.kind === "wolf_kill" ? "Spare everyone" : "Abstain";
+  scene.setPicking(t.candidates, null);
   updateSelection();
   $("action").hidden = false;
-  document.body.classList.add("has-action");
-  if (speaks && matchMedia("(min-width: 900px)").matches) $("act-text").focus();
+  syncSpacer();
+  buzz();
+  tick();
+}
+
+function buzz() {
   try {
     // Browsers refuse (and log) vibration before the first tap.
     const tapped = !navigator.userActivation || navigator.userActivation.hasBeenActive;
@@ -362,15 +394,119 @@ function showTurn(t) {
   } catch (err) {
     console.warn("vibrate failed", err);
   }
-  tick();
 }
+
+function syncSpacer() {
+  document.body.classList.toggle("has-action", !$("action").hidden || !$("chat").hidden);
+}
+
+// ------------------------------------------------------------ open chat
+
+function showChatTurn(t) {
+  if (!chatTurn || chatTurn.turn_id !== t.turn_id) {
+    chatTurn = { ...t, deadline: performance.now() + t.deadline_ms, settle: () => {} };
+    $("chat-error").textContent = "";
+    if (!chatBuzzed) {
+      chatBuzzed = true;
+      buzz();
+    }
+  } else {
+    chatTurn.deadline = performance.now() + t.deadline_ms;
+  }
+  renderChat();
+}
+
+/** Forgets the pending chat turn (window closed, stale, or answered) and lets the poll loop go on. */
+function dropChatTurn() {
+  const current = chatTurn;
+  chatTurn = null;
+  if (current) current.settle();
+  renderChat();
+}
+
+function renderChat() {
+  const s = game.state;
+  const me = session ? game.player(session.player_id) : null;
+  const open = !!(me && me.alive && (chatTurn || s.chat));
+  const box = $("chat");
+  if (box.hidden === open) {
+    box.hidden = !open;
+    syncSpacer();
+    if (open) $("chat-log").scrollTop = $("chat-log").scrollHeight;
+  }
+  if (!open) return;
+  const now = performance.now();
+  const kind = s.chat ? s.chat.kind : chatTurn.kind;
+  const endsAt = s.chat ? s.chat.endsAt : chatTurn.deadline;
+  const wolf = kind === "wolf_chat";
+  $("chat-title").textContent = wolf ? "Wolf chat" : "Open discussion";
+  $("chat-time").textContent = clock(endsAt - now) + " left";
+  box.classList.toggle("wolf", wolf);
+  $("chat-text").placeholder = wolf ? "Plot with your pack…" : "Say something to the village…";
+  const left = Math.max(0, CHAT_MAX - chatSent);
+  $("chat-left").textContent = left + " of " + CHAT_MAX + " left";
+  let status = "";
+  if (left === 0) status = "You've used all " + CHAT_MAX + " messages this round.";
+  else if (!chatTurn) {
+    const wait = chatLastSent + CHAT_COOLDOWN_MS - now;
+    status = wait > 0 ? "You can talk again in " + Math.ceil(wait / 1000) + "s" : "Waiting for your turn…";
+  }
+  $("chat-status").textContent = status;
+  const n = [...$("chat-text").value].length;
+  $("chat-counter").textContent = n + " / " + MAX_TEXT;
+  $("chat-send").disabled = !chatTurn || chatBusy || left === 0 || n === 0 || n > MAX_TEXT;
+}
+
+async function sendChat() {
+  const text = $("chat-text").value.trim();
+  if (!chatTurn || chatBusy || !session || !text) return;
+  const current = chatTurn;
+  chatBusy = true;
+  $("chat-error").textContent = "";
+  renderChat();
+  try {
+    const res = await fetch("/v1/act", {
+      method: "POST",
+      headers: { authorization: "Bearer " + session.token, "content-type": "application/json" },
+      body: JSON.stringify({ turn_id: current.turn_id, action: { type: "speak", text } }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (res.ok) {
+      chatSent++;
+      chatLastSent = performance.now();
+      $("chat-text").value = "";
+      if (chatTurn === current) dropChatTurn();
+      return;
+    }
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 401) forget("The game was reset. Join again!");
+    // 409: the window closed (or the turn moved on); drop it quietly and keep the draft.
+    else if (res.status === 409) {
+      if (chatTurn === current) dropChatTurn();
+    } else $("chat-error").textContent = (res.status === 422 ? "Not allowed: " : "Error: ") + ((body && body.error) || "HTTP " + res.status);
+  } catch (err) {
+    $("chat-error").textContent = "Could not send (" + err.message + "). Try again.";
+  } finally {
+    chatBusy = false;
+    renderChat();
+  }
+}
+
+$("chat-text").addEventListener("input", renderChat);
+// Enter sends; Shift+Enter adds a newline. Skip while an IME is composing so Enter can confirm a character.
+$("chat-text").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+  e.preventDefault();
+  sendChat();
+});
+$("chat-send").addEventListener("click", () => sendChat());
 
 function hideTurn() {
   if (turn) turn.settle();
   turn = null;
   selected = null;
   $("action").hidden = true;
-  document.body.classList.remove("has-action");
+  syncSpacer();
   scene.setPicking(null, null);
 }
 
@@ -383,17 +519,13 @@ function pick(id) {
 function updateSelection() {
   for (const b of $("act-cands").children) b.classList.toggle("selected", Number(b.dataset.id) === selected);
   $("act-confirm").disabled = selected === null || busy;
-  $("act-confirm").textContent = selected === null ? "Confirm" : "Confirm " + game.nameOf(selected);
+  const verb = turn && turn.kind === "sheriff_shoot" ? "Fire" : "Confirm";
+  $("act-confirm").textContent = selected === null ? verb : verb + (verb === "Fire" ? " at " : " ") + game.nameOf(selected);
   if (turn) scene.setPicking(turn.candidates, selected);
 }
 
-function updateCounter() {
-  const n = [...$("act-text").value].length;
-  $("act-counter").textContent = n + " / " + MAX_TEXT;
-  $("act-send").disabled = busy || n === 0 || n > MAX_TEXT;
-}
-
 function tick() {
+  renderChat();
   if (!turn) return;
   const left = Math.max(0, turn.deadline - performance.now());
   const total = Math.max(turn.deadline_ms, 1);
@@ -418,7 +550,7 @@ async function act(action) {
     });
     if (res.ok) {
       hideTurn();
-      notice(action.type === "speak" ? (action.text ? "Said it." : "You stayed silent.") : "Choice locked in.");
+      notice("Choice locked in.");
       return;
     }
     const body = await res.json().catch(() => ({}));
@@ -442,17 +574,9 @@ async function act(action) {
 }
 
 function setButtons() {
-  for (const id of ["act-silent", "act-abstain"]) $(id).disabled = busy;
-  updateCounter();
+  $("act-abstain").disabled = busy;
   updateSelection();
 }
-
-$("act-text").addEventListener("input", updateCounter);
-$("act-text").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) $("act-send").click();
-});
-$("act-send").addEventListener("click", () => act({ type: "speak", text: $("act-text").value.trim() }));
-$("act-silent").addEventListener("click", () => act({ type: "speak", text: "" }));
 $("act-confirm").addEventListener("click", () => {
   if (selected !== null) act({ type: "target", target: selected });
 });

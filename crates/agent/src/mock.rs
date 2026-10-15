@@ -1,33 +1,42 @@
 //! Random valid actions with no LLM, for exercising the server.
 
-use crate::reply::{Decision, MAX_REASONING_LEN, is_speak, truncate};
+use crate::{
+    chat,
+    reply::{Decision, MAX_REASONING_LEN, MAX_SAY_LEN, is_speak, shorten, truncate},
+};
 use rand::{RngExt, SeedableRng, rngs::StdRng, seq::IndexedRandom};
-use werewolf_protocol::{Action, MAX_TEXT_LEN, Turn};
+use werewolf_protocol::{Action, Turn, TurnKind};
+
+/// Chance a mock sheriff fires on each shoot turn; low, since a miss kills the sheriff too.
+const SHERIFF_FIRE_CHANCE: f64 = 0.25;
+
+/// Mocks speak this often per chat window and then pass, so mock games finish fast.
+const CHAT_MESSAGES_PER_WINDOW: usize = 2;
 
 /// What the mock says, paired with the thought behind it, in the style the LLM prompt asks for.
 const LINES: &[(&str, &str)] = &[
     (
-        "I don't trust {name}.",
-        "I don't trust {name}, they dodged my question.",
+        "{name}, why so quiet?",
+        "{name} is too quiet. I want them talking.",
     ),
     (
-        "{name} has been very quiet.",
-        "{name} is too quiet. I want them talking.",
+        "Not buying it, {name}.",
+        "I don't trust {name}, they dodged my question.",
     ),
     (
         "{name}, where were you last night?",
         "I want to see if {name} slips up.",
     ),
     (
-        "My gut says {name} is hiding something.",
+        "{name} is hiding something.",
         "{name} seems nervous. I think they're hiding something.",
     ),
     (
-        "I think {name} is telling the truth.",
+        "I believe {name}.",
         "{name} sounds honest to me, so I'll back them.",
     ),
     (
-        "Let's hear from {name} before we vote.",
+        "Your move, {name}.",
         "I can't read {name} yet. I need to hear more.",
     ),
 ];
@@ -45,6 +54,14 @@ impl MockBrain {
 
     pub fn decide(&mut self, turn: &Turn) -> Decision {
         let view = &turn.view;
+        if is_speak(turn.kind) && chat::own_messages(view, turn.kind) >= CHAT_MESSAGES_PER_WINDOW {
+            return Decision {
+                action: Action::Speak {
+                    text: String::new(),
+                },
+                reasoning: Some("I've said my piece. I'll listen for now.".into()),
+            };
+        }
         if is_speak(turn.kind) {
             let others: Vec<&str> = view
                 .players
@@ -59,14 +76,19 @@ impl MockBrain {
                 .unwrap_or(("{name}?", "{name} worries me."));
             return Decision {
                 action: Action::Speak {
-                    text: truncate(&line.replace("{name}", name), MAX_TEXT_LEN).into(),
+                    text: shorten(&line.replace("{name}", name), MAX_SAY_LEN),
                 },
                 reasoning: Some(
                     truncate(&thought.replace("{name}", name), MAX_REASONING_LEN).into(),
                 ),
             };
         }
-        let target = if self.rng.random_bool(0.1) {
+        let hold = if turn.kind == TurnKind::SheriffShoot {
+            1.0 - SHERIFF_FIRE_CHANCE
+        } else {
+            0.1
+        };
+        let target = if self.rng.random_bool(hold) {
             None
         } else {
             turn.candidates.choose(&mut self.rng).copied()
@@ -88,7 +110,9 @@ impl MockBrain {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use werewolf_protocol::{Phase, PlayerView, PublicPlayer, Role, TurnKind};
+    use werewolf_protocol::{
+        MAX_NAME_LEN, Phase, PlayerView, PrivateEvent, PublicEvent, PublicPlayer, Role,
+    };
 
     fn turn(kind: TurnKind) -> Turn {
         let player = |id, name: &str, alive| PublicPlayer {
@@ -157,5 +181,75 @@ mod tests {
                 b.decide(&turn(TurnKind::DayVote))
             );
         }
+    }
+
+    fn spoke(decision: &Decision) -> bool {
+        matches!(&decision.action, Action::Speak { text } if !text.is_empty())
+    }
+
+    #[test]
+    fn mock_speaks_twice_per_chat_window_then_passes() {
+        let mut brain = MockBrain::new(Some(3));
+        let said = |text: &str| PublicEvent::Spoke {
+            player: 1,
+            text: text.into(),
+        };
+        let mut day = turn(TurnKind::DaySpeak);
+        day.view.public_log = vec![
+            said("yesterday"),
+            said("yesterday again"),
+            PublicEvent::PhaseStarted {
+                phase: Phase::Day { n: 2 },
+            },
+            said("first"),
+        ];
+        assert!(spoke(&brain.decide(&day)));
+        day.view.public_log.push(said("second"));
+        let pass = brain.decide(&day);
+        assert_eq!(
+            pass.action,
+            Action::Speak {
+                text: String::new()
+            }
+        );
+        assert!(pass.reasoning.is_some());
+
+        let mut wolves = turn(TurnKind::WolfChat);
+        let wolf_said = || PrivateEvent::WolfSpoke {
+            player: 1,
+            text: "x".into(),
+        };
+        wolves.view.private_log = vec![wolf_said()];
+        assert!(spoke(&brain.decide(&wolves)));
+        wolves.view.private_log.push(wolf_said());
+        assert!(!spoke(&brain.decide(&wolves)));
+    }
+
+    #[test]
+    fn mock_lines_fit_the_speech_limits() {
+        let longest_name = "N".repeat(MAX_NAME_LEN);
+        for (line, thought) in LINES {
+            let line = line.replace("{name}", &longest_name);
+            assert!(line.split_whitespace().count() <= 15, "{line}");
+            assert!(line.chars().count() <= MAX_SAY_LEN, "{line}");
+            assert!(thought.split_whitespace().count() <= 25, "{thought}");
+        }
+    }
+
+    #[test]
+    fn mock_sheriff_fires_about_a_quarter_of_the_time() {
+        let mut brain = MockBrain::new(Some(11));
+        let shoot = turn(TurnKind::SheriffShoot);
+        let mut fired = 0;
+        for _ in 0..1000 {
+            let Action::Target { target } = brain.decide(&shoot).action else {
+                panic!("expected target");
+            };
+            if let Some(t) = target {
+                assert!(shoot.candidates.contains(&t));
+                fired += 1;
+            }
+        }
+        assert!((180..=320).contains(&fired), "fired {fired} of 1000");
     }
 }

@@ -2,6 +2,7 @@
 
 mod backoff;
 mod brain;
+mod chat;
 mod client;
 mod discovery;
 mod game;

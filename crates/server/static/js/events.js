@@ -1,17 +1,28 @@
 // Shared SSE → state reducer. Both pages feed `snapshot` and live events into a Game,
 // which updates `game.state` and tells listeners about each event (with `live` false on replay).
 
-export const ROLE_LABEL = { werewolf: "Werewolf", seer: "Seer", doctor: "Doctor", villager: "Villager" };
+export const ROLE_LABEL = { werewolf: "Werewolf", seer: "Seer", doctor: "Doctor", sheriff: "Sheriff", villager: "Villager" };
 export const KIND_LABEL = {
   day_speak: "day speech", day_vote: "day vote", wolf_chat: "wolf chat",
   wolf_kill: "wolf kill", seer_inspect: "seer inspect", doctor_protect: "doctor protect",
+  sheriff_shoot: "sheriff shot",
 };
 export const ROLE_GOAL = {
   werewolf: "Each night, pick a victim with your pack. By day, blend in. You win when wolves equal or outnumber everyone else.",
   seer: "Each night, inspect one player to learn if they are a werewolf. Help the village vote the wolves out.",
   doctor: "Each night, protect one player from the wolves (not the same player two nights in a row).",
+  sheriff: "You have one bullet. Hit a wolf and only they die; hit anyone else and you die too.",
   villager: "Find the werewolves and vote them out before they eat the village.",
 };
+
+/** Compact read-only rules, e.g. "2 wolves · sheriff · 2 min talk". */
+export function rulesLine(s) {
+  if (!s) return "";
+  const wolves = s.wolves == null ? "auto wolves" : s.wolves + (s.wolves === 1 ? " wolf" : " wolves");
+  const secs = Number(s.discussion_secs) || 0;
+  const talk = secs % 60 === 0 ? secs / 60 + " min talk" : Math.round(secs) + "s talk";
+  return [wolves, s.sheriff ? "sheriff" : "no sheriff", talk].join(" · ");
+}
 
 export function emptyState() {
   return {
@@ -23,6 +34,12 @@ export function emptyState() {
     tally: {},
     votes: [],
     wolfVotes: [],
+    // Open chat window: { kind: "day_speak" | "wolf_chat", endsAt: performance.now() ms } or null.
+    chat: null,
+    // Host settings (see /admin/settings), or null before the first snapshot.
+    settings: null,
+    // Sheriff who fired last, so the shot's deaths can name them.
+    lastShot: null,
   };
 }
 
@@ -80,12 +97,14 @@ export class Game {
       case "snapshot": {
         this.state = emptyState();
         this.state.players = (ev.players || []).map((p) => ({ ...p }));
+        this.state.settings = ev.settings || null;
         for (const r of ev.roles || []) this.state.roles[r.player] = r.role;
         this.emit({ type: "snapshot_begin" }, false);
         for (const item of ev.events || []) this.handleFeed(item, false);
         this.state.phase = ev.phase;
         this.state.winner = ev.winner ?? null;
         const now = performance.now();
+        if (ev.chat) this.state.chat = { kind: ev.chat.kind, endsAt: now + ev.chat.ends_in_ms };
         for (const t of ev.pending || []) {
           this.state.pending[t.player] = { kind: t.kind, deadline: now + t.deadline_ms };
         }
@@ -108,10 +127,21 @@ export class Game {
         delete s.pending[ev.player];
         this.emit(ev, true);
         return;
-      case "reset":
-        this.state = emptyState();
+      case "chat_window":
+        s.chat = ev.open ? { kind: ev.kind, endsAt: performance.now() + ev.ends_in_ms } : null;
         this.emit(ev, true);
         return;
+      case "settings":
+        s.settings = ev.settings;
+        this.emit(ev, true);
+        return;
+      case "reset": {
+        const settings = s.settings;
+        this.state = emptyState();
+        this.state.settings = settings;
+        this.emit(ev, true);
+        return;
+      }
       default:
         this.handleFeed(ev, true);
     }
@@ -128,6 +158,7 @@ export class Game {
     switch (ev.type) {
       case "phase_started":
         s.phase = ev.phase;
+        s.chat = null;
         s.tally = {};
         s.votes = [];
         s.wolfVotes = [];
@@ -136,6 +167,13 @@ export class Game {
         s.votes.push({ voter: ev.voter, target: ev.target });
         if (ev.target !== null) s.tally[ev.target] = (s.tally[ev.target] || 0) + 1;
         break;
+      case "shot": {
+        const p = this.player(ev.sheriff);
+        if (p) p.revealed_role = "sheriff";
+        s.roles[ev.sheriff] = "sheriff";
+        s.lastShot = { sheriff: ev.sheriff, target: ev.target };
+        break;
+      }
       case "died": {
         const p = this.player(ev.player);
         if (p) {
@@ -150,6 +188,7 @@ export class Game {
         s.phase = { kind: "over" };
         s.winner = ev.winner;
         s.pending = {};
+        s.chat = null;
         break;
     }
     this.emit(ev, live);

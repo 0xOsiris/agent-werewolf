@@ -31,30 +31,37 @@
       <div class="role-name" id="role-name"></div>
       <p id="role-goal"></p>
       <div class="pack" id="role-pack"></div>
+      <div class="rules" id="role-rules"></div>
     </div>
   </section>
 
   <section class="card status-card" id="status-card" hidden>
-    <div id="status-text"></div>
+    <div>
+      <div id="status-text"></div>
+      <div class="rules" id="status-rules"></div>
+    </div>
     <button type="button" id="status-again" hidden>Play again</button>
   </section>
 
   <div class="play-grid">
     <section class="scene" id="scene" aria-label="Village scene"></section>
     <div class="panels">
+      <section class="action chat" id="chat" hidden aria-live="polite">
+        <div class="chat-head"><h3 id="chat-title">Open discussion</h3><span id="chat-time"></span></div>
+        <div class="feed chat-log" id="chat-log"></div>
+        <textarea id="chat-text" maxlength="600" rows="2" enterkeyhint="send" placeholder="Say something to the village…"></textarea>
+        <div class="chat-meta"><span id="chat-left"></span><span id="chat-counter">0 / 600</span></div>
+        <div class="chat-row">
+          <span class="chat-status" id="chat-status"></span>
+          <button type="button" id="chat-send" disabled>Send</button>
+        </div>
+        <div class="error" id="chat-error" role="alert"></div>
+      </section>
       <section class="action" id="action" hidden aria-live="polite">
         <h3 id="act-title"></h3>
         <div class="action-meta"><span id="act-help"></span><span id="act-time"></span></div>
         <div class="countdown" id="act-countdown"><div></div></div>
-        <div id="act-speak" hidden>
-          <textarea id="act-text" maxlength="600" rows="3" placeholder="Say something to the village…"></textarea>
-          <div class="counter" id="act-counter">0 / 600</div>
-          <div class="action-row">
-            <button type="button" id="act-send">Send</button>
-            <button type="button" class="secondary" id="act-silent">Stay silent</button>
-          </div>
-        </div>
-        <div id="act-target" hidden>
+        <div id="act-target">
           <div class="candidates" id="act-cands"></div>
           <div class="action-row">
             <button type="button" id="act-confirm" disabled>Confirm</button>

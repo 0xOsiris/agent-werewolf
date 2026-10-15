@@ -8,11 +8,13 @@ use crate::{
 };
 use std::time::Duration;
 use tokio::time::Instant;
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 use werewolf_protocol::{Action, Turn};
 
 /// Held back from the LLM so the action still reaches the server before the deadline.
 const ACT_MARGIN: Duration = Duration::from_secs(3);
+/// With less left in a chat window, a reply would land after it closes, so pass instead.
+const MIN_CHAT_BUDGET: Duration = Duration::from_secs(4);
 
 pub enum Brain {
     Llm(LlmBrain),
@@ -54,6 +56,12 @@ impl LlmBrain {
     }
 
     async fn decide(&self, turn: &Turn, deadline: Instant) -> Decision {
+        if is_speak(turn.kind)
+            && deadline.saturating_duration_since(Instant::now()) < MIN_CHAT_BUDGET
+        {
+            debug!("chat window nearly closed; passing");
+            return Decision::fallback(turn.kind);
+        }
         let deadline = deadline
             .checked_sub(ACT_MARGIN)
             .unwrap_or_else(Instant::now);
@@ -246,6 +254,21 @@ mod tests {
             .await;
         assert_eq!(decision, Decision::fallback(TurnKind::DayVote));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn nearly_closed_chat_window_passes_without_calling_the_llm() {
+        let (url, calls) = fake_openrouter(|_, _| async { completion(r#"{"say": "hi"}"#) }).await;
+        let mut turn = vote_turn();
+        turn.kind = TurnKind::DaySpeak;
+        turn.candidates.clear();
+
+        let deadline = Instant::now() + MIN_CHAT_BUDGET - Duration::from_millis(500);
+        let decision = brain(&url, Duration::from_secs(5))
+            .decide(&turn, deadline)
+            .await;
+        assert_eq!(decision, Decision::fallback(TurnKind::DaySpeak));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

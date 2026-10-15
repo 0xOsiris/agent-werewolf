@@ -1,8 +1,8 @@
 // Projector page: all roles, private events, and reasoning via /spectate/events?key=...
 // Without a key it falls back to the public audience stream and hides the admin controls.
 
-import { Game, connectStream, phaseTitle } from "./events.js";
-import { Feed } from "./feed.js";
+import { Game, connectStream, phaseTitle, rulesLine } from "./events.js";
+import { Feed, el } from "./feed.js";
 import { Scene } from "./scene.js";
 import { iconCanvas } from "./sprites.js";
 
@@ -10,7 +10,7 @@ const $ = (id) => document.getElementById(id);
 const key = new URLSearchParams(location.search).get("key") || "";
 const game = new Game();
 new Feed($("feed"), game, { thoughts: true });
-new Scene($("scene"), game);
+new Scene($("scene"), game, { chatBanner: true });
 $("brand").prepend(iconCanvas("werewolf", 4));
 
 function setStatus(text, bad) {
@@ -26,14 +26,104 @@ function render() {
   document.body.classList.toggle("day", ph === "day" || ph === "lobby" || (ph === "over" && s.winner === "village"));
   const alive = s.players.filter((p) => p.alive).length;
   const humans = s.players.filter((p) => p.human).length;
+  const rules = rulesLine(s.settings);
   $("subtitle").textContent = ph === "lobby"
     ? s.players.length + " joined" + (humans ? " · " + humans + " human" + (humans === 1 ? "" : "s") : "")
-    : alive + " of " + s.players.length + " alive";
+    : alive + " of " + s.players.length + " alive" + (rules ? " · " + rules : "");
   $("start").disabled = ph !== "lobby";
   $("reset").disabled = ph !== "lobby" && ph !== "over";
   const lobby = ph === "lobby";
   $("lobby").hidden = !lobby;
   $("feed").hidden = lobby;
+  renderSettings();
+}
+
+// ------------------------------------------------------------ host settings (lobby, key only)
+
+const PRESETS = [
+  { label: "Werewolves", options: [["Auto", { wolves: null }], ["1", { wolves: 1 }], ["2", { wolves: 2 }], ["3", { wolves: 3 }]] },
+  { label: "Sheriff", options: [["On", { sheriff: true }], ["Off", { sheriff: false }]] },
+  { label: "Discussion", options: [["1 min", { discussion_secs: 60 }], ["2 min", { discussion_secs: 120 }], ["3 min", { discussion_secs: 180 }]] },
+  {
+    label: "AI chattiness",
+    options: [
+      ["Quiet", { ai_chat_cooldown_secs: 25, ai_max_chat_messages: 2 }],
+      ["Normal", { ai_chat_cooldown_secs: 15, ai_max_chat_messages: 3 }],
+      ["Chatty", { ai_chat_cooldown_secs: 8, ai_max_chat_messages: 5 }],
+    ],
+  },
+  { label: "Human turn time", options: [["30s", { human_turn_timeout_secs: 30 }], ["60s", { human_turn_timeout_secs: 60 }], ["90s", { human_turn_timeout_secs: 90 }]] },
+];
+let saving = false;
+let settingsKey = "";
+
+const matches = (settings, patch) => Object.entries(patch).every(([k, v]) => settings[k] === v);
+
+function renderSettings() {
+  const s = game.state;
+  const box = $("settings");
+  box.hidden = !key || !s.settings;
+  if (box.hidden) return;
+  const editable = s.phase.kind === "lobby" && !saving;
+  const stamp = JSON.stringify(s.settings) + editable;
+  if (stamp === settingsKey) return;
+  settingsKey = stamp;
+  const rows = PRESETS.map((row) => {
+    const line = el("div", "set-row");
+    line.appendChild(el("span", "set-label", row.label));
+    const group = el("div", "seg");
+    let any = false;
+    for (const [label, patch] of row.options) {
+      const b = el("button", "seg-btn", label);
+      b.type = "button";
+      const on = matches(s.settings, patch);
+      any = any || on;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-pressed", String(on));
+      b.disabled = !editable;
+      b.addEventListener("click", () => saveSettings(patch));
+      group.appendChild(b);
+    }
+    if (!any) group.appendChild(el("span", "seg-custom", "Custom"));
+    line.appendChild(group);
+    return line;
+  });
+  $("set-rows").replaceChildren(...rows);
+}
+
+function setSettingsStatus(text, bad) {
+  $("set-status").textContent = text;
+  $("set-status").classList.toggle("bad", !!bad);
+}
+
+async function saveSettings(patch) {
+  const current = game.state.settings;
+  if (!current || saving) return;
+  saving = true;
+  setSettingsStatus("Saving…");
+  renderSettings();
+  try {
+    const res = await fetch("/admin/settings", {
+      method: "PUT",
+      headers: { "x-spectator-key": key, "content-type": "application/json" },
+      body: JSON.stringify({ ...current, ...patch }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) {
+      // The settings event follows on the stream; apply the reply now so the click feels instant.
+      if (body && typeof body === "object" && "sheriff" in body) game.state.settings = body;
+      else game.state.settings = { ...current, ...patch };
+      setSettingsStatus("Saved", false);
+    } else {
+      setSettingsStatus("Not saved: " + ((body && body.error) || "HTTP " + res.status), true);
+    }
+  } catch (err) {
+    setSettingsStatus("Not saved: " + err.message, true);
+  } finally {
+    saving = false;
+    render();
+  }
 }
 
 game.on(() => render());

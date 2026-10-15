@@ -20,7 +20,10 @@ pub enum SpectatorEvent {
         roles: Vec<RoleEntry>,
         /// Every `public`, `private`, and `reasoning` event so far, in order.
         events: Vec<SpectatorEvent>,
+        /// Pending turns other than chat; chat is described by `chat`.
         pending: Vec<PendingTurn>,
+        /// The open chat window, if any.
+        chat: Option<ChatState>,
     },
     PlayerJoined {
         player: PublicPlayer,
@@ -50,6 +53,12 @@ pub enum SpectatorEvent {
         kind: TurnKind,
         text: String,
     },
+    /// A chat window opened (`ends_in_ms` = its length) or closed (`ends_in_ms` = 0).
+    ChatWindow {
+        kind: TurnKind,
+        open: bool,
+        ends_in_ms: u64,
+    },
     Reset,
 }
 
@@ -76,6 +85,7 @@ impl SpectatorEvent {
             Self::TurnStarted { player, kind, .. } | Self::TurnEnded { player, kind, .. } => {
                 viewer.sees_turn(*player, *kind, roles)
             }
+            Self::ChatWindow { kind, .. } => viewer.sees_chat(*kind, roles),
             Self::Roles { .. } if over => true,
             Self::Roles { roles: entries } if matches!(viewer, Viewer::Player { .. }) => {
                 return Some(Cow::Owned(Self::Roles {
@@ -136,6 +146,11 @@ impl Viewer {
         }
     }
 
+    /// Day discussion is public; wolf chat only shows to the pack.
+    pub fn sees_chat(self, kind: TurnKind, roles: &[Role]) -> bool {
+        self == Self::Spectator || kind != TurnKind::WolfChat || self.is_wolf(roles)
+    }
+
     /// Your own role, plus the pack's if you are a wolf; everyone's once the game is over.
     pub fn visible_roles(
         self,
@@ -168,6 +183,12 @@ pub struct Broadcast {
 pub struct RoleEntry {
     pub player: PlayerId,
     pub role: Role,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct ChatState {
+    pub kind: TurnKind,
+    pub ends_in_ms: u64,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -248,6 +269,25 @@ mod tests {
         assert!(!sees(villager, &turn(0, TurnKind::WolfChat)));
         assert!(!sees(Viewer::Audience, &turn(3, TurnKind::DoctorProtect)));
         assert!(sees(Viewer::Audience, &turn(3, TurnKind::DayVote)));
+    }
+
+    #[test]
+    fn wolf_chat_window_shows_only_to_wolves() {
+        let window = |kind| SpectatorEvent::ChatWindow {
+            kind,
+            open: true,
+            ends_in_ms: 40_000,
+        };
+        assert!(sees(Viewer::Player { id: 0 }, &window(TurnKind::WolfChat)));
+        assert!(sees(Viewer::Spectator, &window(TurnKind::WolfChat)));
+        for viewer in [
+            Viewer::Player { id: 2 },
+            Viewer::Player { id: 4 },
+            Viewer::Audience,
+        ] {
+            assert!(!sees(viewer, &window(TurnKind::WolfChat)));
+            assert!(sees(viewer, &window(TurnKind::DaySpeak)));
+        }
     }
 
     #[test]

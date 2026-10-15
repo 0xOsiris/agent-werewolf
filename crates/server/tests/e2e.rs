@@ -1,6 +1,6 @@
 //! End-to-end tests over real HTTP against an in-process server.
 
-use std::{path::Path, time::Duration};
+use std::{collections::HashSet, path::Path, time::Duration};
 
 use clap::Parser;
 use futures_util::future::join_all;
@@ -10,7 +10,7 @@ use serde_json::Value;
 use tokio::{net::TcpListener, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 use werewolf_protocol::{
-    ActRequest, Action, JoinRequest, JoinResponse, PlayerView, Poll, Team, Turn, TurnKind,
+    ActRequest, Action, JoinRequest, JoinResponse, Phase, PlayerView, Poll, Team, Turn, TurnKind,
 };
 use werewolf_server::Config;
 
@@ -34,15 +34,24 @@ impl Server {
         let key = format!("--spectator-key={KEY}");
         let seed = format!("--seed={SEED}");
         let log_dir = format!("--log-dir={}", log_dir.display());
-        let base = [
-            "werewolf-server",
-            "--no-mdns",
+        // Fast defaults; a test's own `args` replace any of these by flag name.
+        let defaults = [
             "--pace-ms=0",
-            &key,
-            &seed,
-            &log_dir,
+            "--discussion-secs=1.5",
+            "--wolf-chat-secs=1",
+            "--chat-cooldown-secs=0.05",
+            "--ai-chat-cooldown-secs=0.05",
+            "--ai-chat-jitter-secs=0.05",
+            "--quiet-secs=0.2",
         ];
-        let config = Config::parse_from(base.iter().chain(args).copied());
+        let flag = |arg: &str| arg.split('=').next().unwrap_or_default().to_owned();
+        let overridden: Vec<String> = args.iter().map(|a| flag(a)).collect();
+        let base = ["werewolf-server", "--no-mdns", &key, &seed, &log_dir];
+        let defaults = defaults
+            .into_iter()
+            .filter(|d| !overridden.contains(&flag(d)));
+        let config =
+            Config::parse_from(base.into_iter().chain(defaults).chain(args.iter().copied()));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let shutdown = CancellationToken::new();
@@ -145,27 +154,98 @@ async fn error_of(res: Response) -> String {
         .to_owned()
 }
 
-/// Plays random legal moves, or never acts if `silent`, until the game ends. Spares the silent
-/// bot so that it lives long enough to time out.
-async fn bot(server: &Server, token: String, seed: u64, silent: bool) -> (Team, PlayerView) {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Style {
+    /// Speaks twice per chat window, then passes; plays random legal moves.
+    Chatty,
+    /// Never acts.
+    Silent,
+    /// Plays like `Chatty` but never answers chat, then tries the closed window's turn.
+    IgnoresChat,
+}
+
+fn is_chat(kind: TurnKind) -> bool {
+    matches!(kind, TurnKind::DaySpeak | TurnKind::WolfChat)
+}
+
+/// How one seat's game went.
+struct Played {
+    winner: Team,
+    view: PlayerView,
+    /// Every turn this seat answered, in order.
+    answered: Vec<(Phase, TurnKind, u64)>,
+}
+
+/// Plays one seat until the game ends. Spares the silent seat so that it lives long enough to
+/// time out.
+async fn bot(server: &Server, token: String, seed: u64, style: Style) -> Played {
     let mut rng = StdRng::seed_from_u64(seed);
+    let mut answered = Vec::new();
+    let mut chat_phase = None;
+    let mut said = 0;
+    let mut closed_chat_turn = None;
     loop {
         let res = server.poll(&token, 5).await;
         assert_eq!(res.status(), StatusCode::OK);
         match res.json::<Poll>().await.unwrap() {
             Poll::Wait => {}
-            Poll::GameOver { winner, view } => return (winner, view),
-            Poll::Turn(turn) if silent => {
-                tokio::time::sleep(Duration::from_millis(turn.deadline_ms + 50)).await;
+            Poll::GameOver { winner, view } => {
+                return Played {
+                    winner,
+                    view,
+                    answered,
+                };
+            }
+            Poll::Turn(turn)
+                if style == Style::Silent
+                    || (style == Style::IgnoresChat && is_chat(turn.kind)) =>
+            {
+                assert_ne!(
+                    closed_chat_turn,
+                    Some(turn.turn_id),
+                    "a closed window's turn came back"
+                );
+                if is_chat(turn.kind) {
+                    closed_chat_turn = Some(turn.turn_id);
+                }
+                // Past the deadline, which for chat is when the window closes.
+                tokio::time::sleep(Duration::from_millis(turn.deadline_ms + 200)).await;
             }
             Poll::Turn(turn) => {
+                // Agents skip ids they already answered, so a reused id would stall them.
+                assert!(
+                    answered.iter().all(|&(.., id)| id != turn.turn_id),
+                    "turn {} came back after it was answered",
+                    turn.turn_id
+                );
+                if let Some(stale) = closed_chat_turn.take() {
+                    let late = Action::Speak {
+                        text: "too late".to_owned(),
+                    };
+                    let res = server.act(&token, stale, late).await;
+                    assert_eq!(res.status(), StatusCode::CONFLICT);
+                    assert!(error_of(res).await.contains("stale turn"));
+                }
+                if chat_phase != Some(turn.view.phase) {
+                    chat_phase = Some(turn.view.phase);
+                    said = 0;
+                }
                 let action = match turn.kind {
-                    TurnKind::DaySpeak => Action::Speak {
-                        text: format!("I am player {}. Trust me.", turn.view.you),
+                    TurnKind::DaySpeak | TurnKind::WolfChat if said >= 2 => Action::Speak {
+                        text: String::new(),
                     },
-                    TurnKind::WolfChat => Action::Speak {
-                        text: format!("{WOLF_CHAT}: let's eat someone"),
-                    },
+                    TurnKind::DaySpeak => {
+                        said += 1;
+                        Action::Speak {
+                            text: format!("I am player {}. Trust me.", turn.view.you),
+                        }
+                    }
+                    TurnKind::WolfChat => {
+                        said += 1;
+                        Action::Speak {
+                            text: format!("{WOLF_CHAT}: let's eat someone"),
+                        }
+                    }
                     _ => {
                         let spared: Vec<u32> = turn
                             .candidates
@@ -180,6 +260,7 @@ async fn bot(server: &Server, token: String, seed: u64, silent: bool) -> (Team, 
                 };
                 let res = server.act(&token, turn.turn_id, action).await;
                 assert_eq!(res.status(), StatusCode::OK, "{}", error_of(res).await);
+                answered.push((turn.view.phase, turn.kind, turn.turn_id));
             }
         }
     }
@@ -198,24 +279,24 @@ async fn six_bots_play_to_completion() {
         StatusCode::OK
     );
 
-    let bots = tokens
-        .into_iter()
-        .zip(0..)
-        .map(|(token, i)| bot(&server, token, i.into(), i == SILENT));
+    let bots = tokens.into_iter().zip(0..).map(|(token, i)| {
+        let style = if i == SILENT {
+            Style::Silent
+        } else {
+            Style::Chatty
+        };
+        bot(&server, token, i.into(), style)
+    });
     let results = tokio::time::timeout(Duration::from_secs(120), join_all(bots))
         .await
         .expect("game should finish");
 
-    let winner = results[0].0;
+    let winner = results[0].winner;
     assert!(
-        results.iter().all(|(w, _)| *w == winner),
+        results.iter().all(|r| r.winner == winner),
         "bots disagree on the winner"
     );
-    assert!(
-        results
-            .iter()
-            .all(|(_, view)| matches!(view.phase, werewolf_protocol::Phase::Over))
-    );
+    assert!(results.iter().all(|r| matches!(r.view.phase, Phase::Over)));
 
     let names: Vec<String> = std::fs::read_dir(dir.path())
         .unwrap()
@@ -517,20 +598,43 @@ fn assert_visible(viewer: Option<usize>, roles: &[String], over: bool, event: &V
             };
             assert_eq!(event["audience"], allowed, "{viewer:?} saw {event}");
         }
-        "turn_started" | "turn_ended" => assert!(sees_turn(event), "{viewer:?} saw {event}"),
+        "turn_started" | "turn_ended" => {
+            assert!(
+                !is_chat_kind(&event["kind"]),
+                "chat turns have no turn events: {event}"
+            );
+            assert!(sees_turn(event), "{viewer:?} saw {event}");
+        }
+        "chat_window" => {
+            let allowed = event["kind"] == "day_speak" || wolf;
+            assert!(allowed, "{viewer:?} saw {event}");
+        }
         "roles" => sees_roles(&event["roles"], over),
         "snapshot" => {
             let over = !event["winner"].is_null();
             sees_roles(&event["roles"], over);
             for pending in event["pending"].as_array().unwrap() {
+                assert!(
+                    !is_chat_kind(&pending["kind"]),
+                    "chat in pending: {pending}"
+                );
                 assert!(sees_turn(pending), "{viewer:?} saw pending {pending}");
             }
+            let chat = &event["chat"];
+            assert!(
+                chat.is_null() || chat["kind"] == "day_speak" || wolf,
+                "{viewer:?} saw {chat}"
+            );
             for inner in event["events"].as_array().unwrap() {
                 assert_visible(viewer, roles, over, inner);
             }
         }
         _ => {}
     }
+}
+
+fn is_chat_kind(kind: &Value) -> bool {
+    kind == "day_speak" || kind == "wolf_chat"
 }
 
 /// Checks a whole stream for leaks and, for wolves, that the pack's chat arrived.
@@ -576,7 +680,7 @@ async fn watch_streams_only_show_what_each_player_may_know() {
         .iter()
         .cloned()
         .zip(0..)
-        .map(|(token, i)| bot(&server, token, i, false));
+        .map(|(token, i)| bot(&server, token, i, Style::Chatty));
     tokio::time::timeout(Duration::from_secs(120), join_all(bots))
         .await
         .expect("game should finish");
@@ -604,6 +708,14 @@ async fn watch_streams_only_show_what_each_player_may_know() {
             "stream {me} ended early"
         );
         assert_stream(Some(me), &roles, &events);
+        let wolf_window = events
+            .iter()
+            .any(|e| e["type"] == "chat_window" && e["kind"] == "wolf_chat");
+        assert_eq!(
+            wolf_window,
+            roles[me] == "werewolf",
+            "wolf chat window for {me}"
+        );
         let start_roles = events.iter().find(|e| e["type"] == "roles").unwrap();
         let expected = if roles[me] == "werewolf" { 2 } else { 1 };
         assert_eq!(start_roles["roles"].as_array().unwrap().len(), expected);
@@ -620,5 +732,182 @@ async fn watch_streams_only_show_what_each_player_may_know() {
     let late = read_events(server.watch(None).await, |_| true).await;
     assert_stream(None, &roles, &late);
 
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn wolf_count_needs_enough_players() {
+    assert!(Config::try_parse_from(["werewolf-server", "--wolves=0"]).is_err());
+    let too_many = Config::parse_from(["werewolf-server", "--wolves=6"]);
+    assert!(too_many.validate().is_err(), "6 wolves need 13 seats");
+
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start(dir.path(), &["--wolves=3", "--auto-start=5"]).await;
+    // Auto-start is refused at five and six players, so the lobby stays open.
+    for i in 0..6 {
+        server.join_ok(&format!("p{i}")).await;
+    }
+    let res = server.admin("/admin/start", Some(KEY)).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(error_of(res).await, "need at least 7 players for 3 wolves");
+    server.join_ok("p6").await;
+    assert_eq!(server.join("late").await.status(), StatusCode::CONFLICT);
+    server.stop().await;
+}
+
+/// Reads summary JSON from the only game in `dir`.
+fn read_summary(dir: &Path) -> Value {
+    let path = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.to_string_lossy().ends_with("-summary.json"))
+        .expect("summary written");
+    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn closing_a_chat_window_cancels_turns_without_timeouts() {
+    let dir = tempfile::tempdir().unwrap();
+    let args = ["--turn-timeout-secs=5", "--discussion-secs=1"];
+    let server = Server::start(dir.path(), &args).await;
+    let mut tokens = Vec::new();
+    for i in 0..5 {
+        tokens.push(server.join_ok(&format!("bot{i}")).await.token);
+    }
+    assert_eq!(
+        server.admin("/admin/start", Some(KEY)).await.status(),
+        StatusCode::OK
+    );
+    // Nobody answers chat, so every window runs out; each bot then acts on its dead turn.
+    let bots = tokens
+        .into_iter()
+        .zip(0..)
+        .map(|(token, i)| bot(&server, token, i, Style::IgnoresChat));
+    tokio::time::timeout(Duration::from_secs(120), join_all(bots))
+        .await
+        .expect("game should finish");
+
+    let summary = read_summary(dir.path());
+    for p in summary["players"].as_array().unwrap() {
+        assert_eq!(p["timeouts"], 0, "a closing window is not a timeout: {p}");
+        assert_eq!(
+            p["invalid_actions"], 0,
+            "stale chat answers are not invalid: {p}"
+        );
+    }
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_messages_skip_the_pace() {
+    let dir = tempfile::tempdir().unwrap();
+    let args = [
+        "--pace-ms=1000",
+        "--turn-timeout-secs=10",
+        "--discussion-secs=3",
+    ];
+    let server = Server::start(dir.path(), &args).await;
+    let mut tokens = Vec::new();
+    for i in 0..5 {
+        tokens.push(server.join_ok(&format!("bot{i}")).await.token);
+    }
+    let res = server.get(&format!("/spectate/events?key={KEY}")).await;
+    let window_closed =
+        |e: &Value| e["type"] == "chat_window" && e["kind"] == "day_speak" && e["open"] == false;
+    let feed = tokio::spawn(read_timed_events(res, window_closed));
+    assert_eq!(
+        server.admin("/admin/start", Some(KEY)).await.status(),
+        StatusCode::OK
+    );
+    let bots: Vec<_> = tokens
+        .into_iter()
+        .zip(0..)
+        .map(|(token, i)| bot(&server, token, i, Style::Chatty))
+        .collect();
+    let play = join_all(bots);
+    let events = tokio::select! {
+        events = feed => events.unwrap(),
+        _ = play => panic!("the game ended before day 1's discussion closed"),
+        () = tokio::time::sleep(Duration::from_secs(60)) => panic!("no discussion within 60s"),
+    };
+
+    let spoke: Vec<tokio::time::Instant> = events
+        .iter()
+        .filter(|(_, e)| e["type"] == "public" && e["event"]["type"] == "spoke")
+        .map(|(at, _)| *at)
+        .collect();
+    assert!(spoke.len() >= 5, "every bot speaks: {}", spoke.len());
+    // Paced at 1s each, five messages would take at least 4s.
+    let spread = spoke[4] - spoke[0];
+    assert!(
+        spread < Duration::from_millis(800),
+        "chat was paced: {spread:?}"
+    );
+    server.stop().await;
+}
+
+/// Like [`read_events`], stamping each event with its arrival time.
+async fn read_timed_events(
+    mut res: Response,
+    stop: impl Fn(&Value) -> bool,
+) -> Vec<(tokio::time::Instant, Value)> {
+    let mut buf = Vec::new();
+    let mut events = Vec::new();
+    while let Some(chunk) = res.chunk().await.unwrap() {
+        let at = tokio::time::Instant::now();
+        buf.extend_from_slice(&chunk);
+        while let Some(end) = buf.windows(2).position(|w| w == b"\n\n") {
+            let frame: Vec<u8> = buf.drain(..end + 2).collect();
+            let frame = std::str::from_utf8(&frame).unwrap();
+            for data in frame.lines().filter_map(|l| l.strip_prefix("data:")) {
+                let event: Value = serde_json::from_str(data.trim_start()).unwrap();
+                let done = stop(&event);
+                events.push((at, event));
+                if done {
+                    return events;
+                }
+            }
+        }
+    }
+    events
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reissued_chat_turns_get_fresh_ids() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start(dir.path(), &["--turn-timeout-secs=5"]).await;
+    let mut tokens = Vec::new();
+    for i in 0..6 {
+        tokens.push(server.join_ok(&format!("bot{i}")).await.token);
+    }
+    assert_eq!(
+        server.admin("/admin/start", Some(KEY)).await.status(),
+        StatusCode::OK
+    );
+    let bots = tokens
+        .into_iter()
+        .zip(0..)
+        .map(|(token, i)| bot(&server, token, i, Style::Chatty));
+    let results = tokio::time::timeout(Duration::from_secs(120), join_all(bots))
+        .await
+        .expect("game should finish");
+
+    let ids: Vec<u64> = results
+        .iter()
+        .flat_map(|r| r.answered.iter().map(|&(.., id)| id))
+        .collect();
+    let unique: HashSet<u64> = ids.iter().copied().collect();
+    assert_eq!(unique.len(), ids.len(), "a turn_id was reused");
+    // Chatty bots speak twice and then pass, so day 1 re-issues at least two chat turns each.
+    let day_one_chat = |r: &Played| {
+        r.answered
+            .iter()
+            .filter(|&&(phase, kind, _)| phase == Phase::Day { n: 1 } && kind == TurnKind::DaySpeak)
+            .count()
+    };
+    assert!(
+        results.iter().any(|r| day_one_chat(r) >= 3),
+        "expected re-issued chat turns on day 1"
+    );
     server.stop().await;
 }

@@ -18,6 +18,8 @@ pub enum Role {
     Seer,
     Doctor,
     Villager,
+    /// Village gunslinger with one bullet; shooting a non-wolf kills the sheriff too.
+    Sheriff,
 }
 
 impl Role {
@@ -91,11 +93,13 @@ pub struct Turn {
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnKind {
-    /// Public day discussion. Answer with `speak`.
+    /// Public day discussion, re-issued while the window is open. Answer with `speak`; empty
+    /// text passes.
     DaySpeak,
     /// Vote to eliminate. Answer with `target` (null abstains).
     DayVote,
-    /// Private wolf discussion. Answer with `speak`.
+    /// Private wolf discussion, re-issued while the window is open. Answer with `speak`; empty
+    /// text passes.
     WolfChat,
     /// Pick tonight's victim. Answer with `target`.
     WolfKill,
@@ -103,6 +107,8 @@ pub enum TurnKind {
     SeerInspect,
     /// Save one player from tonight's kill. Answer with `target`.
     DoctorProtect,
+    /// Fire the sheriff's one bullet before the vote. Answer with `target`; null holds fire.
+    SheriffShoot,
 }
 
 /// Everything this player is allowed to know.
@@ -124,7 +130,7 @@ pub struct PublicPlayer {
     pub name: String,
     pub model: Option<String>,
     pub alive: bool,
-    /// Revealed on death.
+    /// Revealed on death, or when the sheriff fires.
     pub revealed_role: Option<Role>,
     #[serde(default)]
     pub human: bool,
@@ -144,6 +150,11 @@ pub enum PublicEvent {
         voter: PlayerId,
         target: Option<PlayerId>,
     },
+    /// The sheriff fired; `Died` events follow.
+    Shot {
+        sheriff: PlayerId,
+        target: PlayerId,
+    },
     Died {
         player: PlayerId,
         role: Role,
@@ -161,6 +172,10 @@ pub enum PublicEvent {
 pub enum DeathCause {
     Vote,
     Night,
+    /// Shot by the sheriff.
+    Shot,
+    /// The sheriff, after shooting a non-wolf.
+    Backfire,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

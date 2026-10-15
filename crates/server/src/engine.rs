@@ -1,7 +1,7 @@
 //! Pure, deterministic game rules. No I/O: the driver hands out [`Game::turns`] and feeds the
 //! answers back through [`Game::submit`].
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, num::NonZeroUsize};
 
 use rand::{
     SeedableRng,
@@ -23,6 +23,39 @@ pub const LAST_DAY: u32 = 10;
 pub enum EngineError {
     #[error("need at least {MIN_PLAYERS} players, got {0}")]
     TooFewPlayers(usize),
+    /// `setup` reads like "2 wolves + sheriff".
+    #[error("need at least {need} players for {setup}")]
+    TooFewForSetup { setup: String, need: usize },
+}
+
+/// Which special roles a game deals.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Setup {
+    /// Fixed wolf count; by default max(1, n / 4).
+    pub wolves: Option<NonZeroUsize>,
+    /// Deal one villager the sheriff role.
+    pub sheriff: bool,
+}
+
+/// Seats needed: fewer wolves than others, plus a seer, doctor, the sheriff if on, and a villager.
+pub fn players_needed(wolves: usize, sheriff: bool) -> usize {
+    (2 * wolves + 1)
+        .max(wolves + 2 + usize::from(sheriff) + 1)
+        .max(MIN_PLAYERS)
+}
+
+/// Names a setup in errors, like "2 wolves + sheriff".
+pub fn describe_setup(wolves: usize, sheriff: bool) -> String {
+    let sheriff = if sheriff { " + sheriff" } else { "" };
+    format!("{wolves} wolves{sheriff}")
+}
+
+/// The sheriff's one shot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShotRecord {
+    pub sheriff: PlayerId,
+    pub target: PlayerId,
+    pub hit_wolf: bool,
 }
 
 /// Which role may see a private event.
@@ -40,7 +73,7 @@ impl Audience {
             Role::Werewolf => Some(Self::Wolves),
             Role::Seer => Some(Self::Seer),
             Role::Doctor => Some(Self::Doctor),
-            Role::Villager => None,
+            Role::Villager | Role::Sheriff => None,
         }
     }
 }
@@ -68,9 +101,13 @@ pub struct Answer {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Step {
-    WolfChat { speaker: PlayerId },
+    /// Open chat among living wolves.
+    WolfChat,
     NightActions,
-    DaySpeak { round: u32, speaker: PlayerId },
+    /// Open chat among all living players.
+    Discussion,
+    /// The sheriff may fire before the vote.
+    SheriffShoot,
     DayVote,
     Over,
 }
@@ -84,8 +121,10 @@ pub struct Game {
     step: Step,
     /// Number of the current night/day; night n precedes day n.
     day: u32,
-    speak_rounds: u32,
     last_protected: Option<PlayerId>,
+    /// The sheriff still holds their bullet.
+    bullet: bool,
+    shot: Option<ShotRecord>,
     winner: Option<Team>,
     public_log: Vec<PublicEvent>,
     private_log: Vec<(Audience, PrivateEvent)>,
@@ -96,16 +135,28 @@ impl Game {
     /// Seats `roster` in order (ids become seat numbers), deals roles, and starts night 1.
     pub fn new(
         roster: Vec<PublicPlayer>,
-        speak_rounds: u32,
+        setup: Setup,
         seed: u64,
     ) -> Result<(Self, Vec<GameEvent>), EngineError> {
         let n = roster.len();
-        if n < MIN_PLAYERS {
-            return Err(EngineError::TooFewPlayers(n));
+        let wolves = match setup.wolves.map(NonZeroUsize::get) {
+            Some(wolves) => wolves,
+            None if n < MIN_PLAYERS => return Err(EngineError::TooFewPlayers(n)),
+            None => (n / 4).max(1),
+        };
+        let need = players_needed(wolves, setup.sheriff);
+        if n < need {
+            return Err(EngineError::TooFewForSetup {
+                setup: describe_setup(wolves, setup.sheriff),
+                need,
+            });
         }
         let mut rng = StdRng::seed_from_u64(seed);
-        let mut roles = vec![Role::Werewolf; (n / 4).max(1)];
+        let mut roles = vec![Role::Werewolf; wolves];
         roles.extend([Role::Seer, Role::Doctor]);
+        if setup.sheriff {
+            roles.push(Role::Sheriff);
+        }
         roles.resize(n, Role::Villager);
         roles.shuffle(&mut rng);
 
@@ -127,8 +178,9 @@ impl Game {
             phase: Phase::Lobby,
             step: Step::Over,
             day: 0,
-            speak_rounds,
             last_protected: None,
+            bullet: setup.sheriff,
+            shot: None,
             winner: None,
             public_log: Vec::new(),
             private_log: Vec::new(),
@@ -159,7 +211,48 @@ impl Game {
         self.died_on.get(player as usize).copied().flatten()
     }
 
-    /// Turns to hand out now, in seat order. Empty only once the game is over.
+    pub fn shot(&self) -> Option<ShotRecord> {
+        self.shot
+    }
+
+    /// The open chat window's turn kind, if the game is waiting on chat.
+    pub fn chat(&self) -> Option<TurnKind> {
+        match self.step {
+            Step::WolfChat => Some(TurnKind::WolfChat),
+            Step::Discussion => Some(TurnKind::DaySpeak),
+            Step::NightActions | Step::SheriffShoot | Step::DayVote | Step::Over => None,
+        }
+    }
+
+    /// Posts `text` to the open chat window if `player` may speak there and it isn't blank.
+    pub fn speak(&mut self, player: PlayerId, text: &str) -> Vec<GameEvent> {
+        let alive = self.living().any(|p| p == player);
+        if alive && !text.trim().is_empty() {
+            let text = text.to_owned();
+            match self.step {
+                Step::Discussion => self.emit_public(PublicEvent::Spoke { player, text }),
+                Step::WolfChat if self.is_wolf(player) => {
+                    self.emit_private(Audience::Wolves, PrivateEvent::WolfSpoke { player, text })
+                }
+                _ => {}
+            }
+        }
+        self.take_events()
+    }
+
+    /// Ends the open chat window and moves on to the sheriff, the vote, or the night actions.
+    pub fn close_chat(&mut self) -> Vec<GameEvent> {
+        match self.step {
+            Step::WolfChat => self.step = Step::NightActions,
+            Step::Discussion if self.armed_sheriff().is_some() => self.step = Step::SheriffShoot,
+            Step::Discussion => self.step = Step::DayVote,
+            Step::NightActions | Step::SheriffShoot | Step::DayVote | Step::Over => {}
+        }
+        self.take_events()
+    }
+
+    /// Turns to hand out now, in seat order; for chat, everyone who may speak. Empty only once
+    /// the game is over.
     pub fn turns(&self) -> Vec<TurnSpec> {
         let living: Vec<PlayerId> = self.living().collect();
         let except = |skip: Option<PlayerId>| -> Vec<PlayerId> {
@@ -175,8 +268,15 @@ impl Game {
             candidates,
         };
         match self.step {
-            Step::WolfChat { speaker } => vec![spec(speaker, TurnKind::WolfChat, Vec::new())],
-            Step::DaySpeak { speaker, .. } => vec![spec(speaker, TurnKind::DaySpeak, Vec::new())],
+            Step::WolfChat => living
+                .iter()
+                .filter(|&&p| self.is_wolf(p))
+                .map(|&p| spec(p, TurnKind::WolfChat, Vec::new()))
+                .collect(),
+            Step::Discussion => living
+                .iter()
+                .map(|&p| spec(p, TurnKind::DaySpeak, Vec::new()))
+                .collect(),
             Step::NightActions => living
                 .iter()
                 .filter_map(|&p| match self.role(p) {
@@ -194,8 +294,13 @@ impl Game {
                         TurnKind::DoctorProtect,
                         except(self.last_protected),
                     )),
-                    Role::Villager => None,
+                    Role::Villager | Role::Sheriff => None,
                 })
+                .collect(),
+            Step::SheriffShoot => self
+                .armed_sheriff()
+                .map(|p| spec(p, TurnKind::SheriffShoot, except(Some(p))))
+                .into_iter()
                 .collect(),
             Step::DayVote => living
                 .iter()
@@ -206,38 +311,23 @@ impl Game {
     }
 
     /// Applies answers to the current [`Game::turns`] and advances. Missing or invalid answers
-    /// get the default action (silence / abstain).
+    /// get the default action (silence / abstain). For chat, this posts one message per answer in
+    /// seat order and closes the window; the driver uses [`Game::speak`] instead.
     pub fn submit(&mut self, answers: &[Answer]) -> Vec<GameEvent> {
         let turns = self.turns();
         match self.step {
-            Step::WolfChat { speaker } => {
-                if let Some(text) = spoken(speaker, answers) {
-                    self.emit_private(
-                        Audience::Wolves,
-                        PrivateEvent::WolfSpoke {
-                            player: speaker,
-                            text,
-                        },
-                    );
+            Step::WolfChat | Step::Discussion => {
+                let mut events = Vec::new();
+                for turn in &turns {
+                    if let Some(text) = spoken(turn.player, answers) {
+                        events.extend(self.speak(turn.player, &text));
+                    }
                 }
-                self.step = match self.next_living_after(speaker, true) {
-                    Some(speaker) => Step::WolfChat { speaker },
-                    None => Step::NightActions,
-                };
+                events.extend(self.close_chat());
+                return events;
             }
             Step::NightActions => self.resolve_night(&turns, answers),
-            Step::DaySpeak { round, speaker } => {
-                if let Some(text) = spoken(speaker, answers) {
-                    self.emit_public(PublicEvent::Spoke {
-                        player: speaker,
-                        text,
-                    });
-                }
-                self.step = match self.next_living_after(speaker, false) {
-                    Some(speaker) => Step::DaySpeak { round, speaker },
-                    None => self.discussion_step(round + 1),
-                };
-            }
+            Step::SheriffShoot => self.resolve_shot(&turns, answers),
             Step::DayVote => self.resolve_vote(&turns, answers),
             Step::Over => {}
         }
@@ -307,7 +397,10 @@ impl Game {
                         self.emit_private(Audience::Doctor, PrivateEvent::Protected { target });
                     }
                 }
-                TurnKind::DaySpeak | TurnKind::DayVote | TurnKind::WolfChat => {}
+                TurnKind::DaySpeak
+                | TurnKind::DayVote
+                | TurnKind::WolfChat
+                | TurnKind::SheriffShoot => {}
             }
         }
         let victim = leaders(&wolf_votes).choose(&mut self.rng).copied();
@@ -320,8 +413,43 @@ impl Game {
             _ => self.emit_public(PublicEvent::PeacefulNight),
         }
         if !self.is_over() {
-            self.step = self.discussion_step(0);
+            self.step = Step::Discussion;
         }
+    }
+
+    /// Fires if the sheriff chose a target; holding fire (or timing out) keeps the bullet.
+    fn resolve_shot(&mut self, turns: &[TurnSpec], answers: &[Answer]) {
+        let fired = turns
+            .iter()
+            .find_map(|turn| Some((turn.player, chosen(turn, answers)?)));
+        if let Some((sheriff, target)) = fired {
+            self.bullet = false;
+            if let Some(seat) = self.players.get_mut(sheriff as usize) {
+                seat.revealed_role = Some(Role::Sheriff);
+            }
+            self.emit_public(PublicEvent::Shot { sheriff, target });
+            let hit_wolf = self.is_wolf(target);
+            self.shot = Some(ShotRecord {
+                sheriff,
+                target,
+                hit_wolf,
+            });
+            let when = self.phase;
+            self.bury(target, DeathCause::Shot, when);
+            if !hit_wolf {
+                self.bury(sheriff, DeathCause::Backfire, when);
+            }
+            self.settle();
+        }
+        if !self.is_over() {
+            self.step = Step::DayVote;
+        }
+    }
+
+    /// The living sheriff, if they still hold their bullet.
+    fn armed_sheriff(&self) -> Option<PlayerId> {
+        self.living()
+            .find(|&p| self.bullet && self.role(p) == Role::Sheriff)
     }
 
     fn resolve_vote(&mut self, turns: &[TurnSpec], answers: &[Answer]) {
@@ -351,25 +479,21 @@ impl Game {
     fn start_night(&mut self, n: u32) {
         self.day = n;
         self.set_phase(Phase::Night { n });
-        let first_two = {
-            let mut wolves = self.living().filter(|&p| self.is_wolf(p));
-            (wolves.next(), wolves.next())
+        let wolves = self.living().filter(|&p| self.is_wolf(p)).count();
+        self.step = if wolves >= 2 {
+            Step::WolfChat
+        } else {
+            Step::NightActions
         };
-        self.step = match first_two {
-            (Some(speaker), Some(_)) => Step::WolfChat { speaker },
-            _ => Step::NightActions,
-        };
-    }
-
-    /// First speaker of discussion `round`, or the vote once discussion is done.
-    fn discussion_step(&self, round: u32) -> Step {
-        match self.living().next() {
-            Some(speaker) if round < self.speak_rounds => Step::DaySpeak { round, speaker },
-            _ => Step::DayVote,
-        }
     }
 
     fn kill(&mut self, player: PlayerId, cause: DeathCause, when: Phase) {
+        self.bury(player, cause, when);
+        self.settle();
+    }
+
+    /// Records a death without checking for a win, for deaths that come in pairs.
+    fn bury(&mut self, player: PlayerId, cause: DeathCause, when: Phase) {
         let role = self.role(player);
         if let Some(seat) = self.players.get_mut(player as usize) {
             seat.alive = false;
@@ -383,6 +507,9 @@ impl Game {
             role,
             cause,
         });
+    }
+
+    fn settle(&mut self) {
         if let Some(winner) = self.check_win() {
             self.finish(winner);
         }
@@ -415,11 +542,6 @@ impl Game {
     fn set_phase(&mut self, phase: Phase) {
         self.phase = phase;
         self.emit_public(PublicEvent::PhaseStarted { phase });
-    }
-
-    fn next_living_after(&self, player: PlayerId, wolves_only: bool) -> Option<PlayerId> {
-        self.living()
-            .find(|&p| p > player && (!wolves_only || self.is_wolf(p)))
     }
 
     fn seats(&self) -> impl Iterator<Item = PlayerId> + '_ {
@@ -509,7 +631,7 @@ mod tests {
     }
 
     fn game(n: usize, seed: u64) -> Game {
-        Game::new(roster(n), 2, seed).unwrap().0
+        Game::new(roster(n), Setup::default(), seed).unwrap().0
     }
 
     fn speak(text: &str) -> Option<Action> {
@@ -587,9 +709,184 @@ mod tests {
     #[test]
     fn too_few_players_is_rejected() {
         assert_eq!(
-            Game::new(roster(4), 2, 0).err(),
+            Game::new(roster(4), Setup::default(), 0).err(),
             Some(EngineError::TooFewPlayers(4))
         );
+    }
+
+    #[test]
+    fn fixed_wolf_count() {
+        for n in [5, 11] {
+            let (game, _) = Game::new(roster(n), setup(Some(2), false), 3).unwrap();
+            let count = |role| game.roles().iter().filter(|&&r| r == role).count();
+            assert_eq!(count(Role::Werewolf), 2, "n={n}");
+            assert_eq!((count(Role::Seer), count(Role::Doctor)), (1, 1), "n={n}");
+            assert_eq!(count(Role::Villager), n - 4, "n={n}");
+        }
+        let err = |n, wolves, sheriff| {
+            Game::new(roster(n), setup(wolves, sheriff), 3)
+                .err()
+                .map(|e| e.to_string())
+        };
+        assert_eq!(
+            err(4, Some(2), false).as_deref(),
+            Some("need at least 5 players for 2 wolves")
+        );
+        // Three wolves need seven seats: six would leave them at parity from the start.
+        assert_eq!(
+            err(6, Some(3), false).as_deref(),
+            Some("need at least 7 players for 3 wolves")
+        );
+    }
+
+    fn setup(wolves: Option<usize>, sheriff: bool) -> Setup {
+        Setup {
+            wolves: wolves.and_then(NonZeroUsize::new),
+            sheriff,
+        }
+    }
+
+    fn sheriff_game(n: usize, seed: u64) -> Game {
+        Game::new(roster(n), setup(None, true), seed).unwrap().0
+    }
+
+    /// Plays silently until the sheriff's turn, returning the sheriff's seat.
+    fn to_sheriff_turn(game: &mut Game) -> PlayerId {
+        play_until(game, |_, _| None, |g| g.step == Step::SheriffShoot);
+        let turns = game.turns();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].kind, TurnKind::SheriffShoot);
+        assert!(!turns[0].candidates.contains(&turns[0].player));
+        turns[0].player
+    }
+
+    fn shoot(game: &mut Game, at: Option<PlayerId>) -> Vec<GameEvent> {
+        step(game, |_, _| Some(Action::Target { target: at }))
+    }
+
+    #[test]
+    fn role_counts_with_sheriff() {
+        for (n, wolves) in [(5, 1), (8, 2), (12, 3)] {
+            let game = sheriff_game(n, 7);
+            let count = |role| game.roles().iter().filter(|&&r| r == role).count();
+            assert_eq!(count(Role::Werewolf), wolves, "n={n}");
+            assert_eq!(count(Role::Sheriff), 1, "n={n}");
+            assert_eq!(count(Role::Villager), n - wolves - 3, "n={n}");
+        }
+        assert_eq!(
+            Game::new(roster(5), setup(Some(2), true), 0)
+                .err()
+                .map(|e| e.to_string())
+                .as_deref(),
+            Some("need at least 6 players for 2 wolves + sheriff")
+        );
+        assert!(Game::new(roster(6), setup(Some(2), true), 0).is_ok());
+    }
+
+    #[test]
+    fn sheriff_hitting_a_wolf_reveals_only_the_sheriff() {
+        let mut game = sheriff_game(8, 11);
+        let sheriff = to_sheriff_turn(&mut game);
+        let wolf = seat_with(&game, Role::Werewolf);
+        let other = (0..8).find(|&p| p != sheriff && p != wolf).unwrap();
+        let hidden = |g: &Game| g.view(other).unwrap().players[sheriff as usize].revealed_role;
+        assert_eq!(hidden(&game), None, "the sheriff is secret until they fire");
+
+        let events = shoot(&mut game, Some(wolf));
+        assert!(matches!(
+            public(&events)[..],
+            [
+                PublicEvent::Shot { sheriff: s, target: t },
+                PublicEvent::Died { player: d, role: Role::Werewolf, cause: DeathCause::Shot },
+            ] if *s == sheriff && *t == wolf && *d == wolf
+        ));
+        assert_eq!(hidden(&game), Some(Role::Sheriff));
+        assert!(game.players[sheriff as usize].alive);
+        assert_eq!(
+            game.shot(),
+            Some(ShotRecord { sheriff, target: wolf, hit_wolf: true })
+        );
+        assert_eq!(game.step, Step::DayVote);
+    }
+
+    #[test]
+    fn sheriff_misfire_kills_both() {
+        let mut game = sheriff_game(8, 12);
+        let sheriff = to_sheriff_turn(&mut game);
+        let villager = seat_with(&game, Role::Villager);
+        let events = shoot(&mut game, Some(villager));
+        assert!(matches!(
+            public(&events)[..],
+            [
+                PublicEvent::Shot { .. },
+                PublicEvent::Died { player: v, role: Role::Villager, cause: DeathCause::Shot },
+                PublicEvent::Died { player: s, role: Role::Sheriff, cause: DeathCause::Backfire },
+            ] if *v == villager && *s == sheriff
+        ));
+        assert!(!game.players[sheriff as usize].alive);
+        assert_eq!(game.step, Step::DayVote);
+    }
+
+    #[test]
+    fn holding_fire_or_timing_out_keeps_the_bullet() {
+        let mut game = sheriff_game(8, 13);
+        to_sheriff_turn(&mut game);
+        assert!(shoot(&mut game, None).is_empty(), "holding fire is silent");
+        assert_eq!(game.step, Step::DayVote);
+        to_sheriff_turn(&mut game);
+        assert_eq!(game.day, 2);
+        // No answer at all is a timeout, which also holds fire.
+        assert!(game.submit(&[]).is_empty());
+        to_sheriff_turn(&mut game);
+        assert_eq!(game.day, 3);
+        assert_eq!(game.shot(), None);
+    }
+
+    #[test]
+    fn the_bullet_fires_once() {
+        let mut game = sheriff_game(8, 14);
+        to_sheriff_turn(&mut game);
+        let wolf = seat_with(&game, Role::Werewolf);
+        shoot(&mut game, Some(wolf));
+        play_until(
+            &mut game,
+            |_, _| None,
+            |g| g.phase == Phase::Day { n: 2 } && g.chat().is_none(),
+        );
+        assert_eq!(game.step, Step::DayVote, "no second shot on day 2");
+    }
+
+    #[test]
+    fn a_shot_can_end_the_game() {
+        // One wolf: shooting it wins at once, before any vote.
+        let mut game = sheriff_game(5, 15);
+        to_sheriff_turn(&mut game);
+        let wolf = seat_with(&game, Role::Werewolf);
+        let events = shoot(&mut game, Some(wolf));
+        assert!(matches!(
+            public(&events).last(),
+            Some(PublicEvent::GameOver { winner: Team::Village })
+        ));
+        assert!(game.is_over());
+
+        // A misfire after a night kill leaves one wolf against one villager.
+        let mut game = sheriff_game(5, 16);
+        let sheriff = seat_with(&game, Role::Sheriff);
+        let wolf = seat_with(&game, Role::Werewolf);
+        let prey = (0..5).find(|&p| p != sheriff && p != wolf).unwrap();
+        step(&mut game, |_, t| match t.kind {
+            TurnKind::WolfKill => target(prey),
+            _ => None,
+        });
+        to_sheriff_turn(&mut game);
+        let innocent = (0..5)
+            .find(|&p| p != sheriff && p != wolf && p != prey)
+            .unwrap();
+        let events = shoot(&mut game, Some(innocent));
+        assert!(matches!(
+            public(&events).last(),
+            Some(PublicEvent::GameOver { winner: Team::Wolves })
+        ));
     }
 
     #[test]
@@ -760,27 +1057,52 @@ mod tests {
     }
 
     #[test]
-    fn wolf_chat_runs_in_seat_order_and_sees_prior_messages() {
+    fn wolf_chat_window_is_for_living_wolves_only() {
         let mut game = game(8, 8);
         let wolves: Vec<PlayerId> = (0..8)
             .filter(|&p| game.roles()[p as usize] == Role::Werewolf)
             .collect();
-        let first = game.turns();
-        assert_eq!(
-            first,
-            vec![TurnSpec {
-                player: wolves[0],
-                kind: TurnKind::WolfChat,
-                candidates: vec![]
-            }]
-        );
-        step(&mut game, |_, _| speak("eat p0"));
-        let second = game.turns();
-        assert_eq!(second[0].player, wolves[1]);
-        let view = game.view(wolves[1]).unwrap();
+        let villager = seat_with(&game, Role::Villager);
+        assert_eq!(game.chat(), Some(TurnKind::WolfChat));
+        let holders: Vec<PlayerId> = game.turns().iter().map(|t| t.player).collect();
+        assert_eq!(holders, wolves);
+
+        assert_eq!(game.speak(wolves[1], "eat p0").len(), 1);
+        assert!(game.speak(villager, "let me in").is_empty());
+        assert!(game.speak(wolves[0], "  ").is_empty());
+        let view = game.view(wolves[0]).unwrap();
         assert!(
             matches!(&view.private_log[..], [PrivateEvent::WolfSpoke { text, .. }] if text == "eat p0")
         );
+
+        game.close_chat();
+        assert_eq!(game.chat(), None);
+        assert!(game.turns().iter().all(|t| t.kind == TurnKind::WolfKill
+            || t.kind == TurnKind::SeerInspect
+            || t.kind == TurnKind::DoctorProtect));
+        assert!(game.speak(wolves[0], "too late").is_empty());
+    }
+
+    #[test]
+    fn day_discussion_lets_anyone_living_speak_any_time() {
+        let mut game = game(5, 9);
+        play_until(
+            &mut game,
+            |_, _| None,
+            |g| g.chat() == Some(TurnKind::DaySpeak),
+        );
+        assert_eq!(game.turns().len(), 5);
+        for p in [3, 0, 3] {
+            assert_eq!(game.speak(p, "hello").len(), 1);
+        }
+        let spoken = game
+            .public_log
+            .iter()
+            .filter(|e| matches!(e, PublicEvent::Spoke { .. }))
+            .count();
+        assert_eq!(spoken, 3);
+        game.close_chat();
+        assert_eq!(game.step, Step::DayVote);
     }
 
     #[test]

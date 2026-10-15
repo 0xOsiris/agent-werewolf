@@ -1,11 +1,17 @@
 //! Joins games and plays turns until the requested number of games is done.
 
-use crate::{backoff::Backoff, brain::Brain, client::GameClient, http::HttpError, reply::Decision};
+use crate::{
+    backoff::Backoff,
+    brain::Brain,
+    client::GameClient,
+    http::HttpError,
+    reply::{Decision, is_speak},
+};
 use anyhow::bail;
 use reqwest::StatusCode;
 use std::time::Duration;
 use tokio::time::{Instant, sleep};
-use tracing::{Instrument, info_span, warn};
+use tracing::{Instrument, debug, info_span, warn};
 use werewolf_protocol::{ActRequest, JoinRequest, PlayerView, Poll, Team, Turn};
 
 const RETRY_BASE: Duration = Duration::from_millis(500);
@@ -175,6 +181,11 @@ impl Player {
             };
             match error.status() {
                 Some(StatusCode::UNAUTHORIZED) => return Ok(Some(SessionEnd::TokenRejected)),
+                // Chat windows routinely close while the model is still thinking.
+                Some(StatusCode::CONFLICT) if is_speak(turn.kind) => {
+                    debug!(error_class = "stale_turn", %error, "chat window closed before our message landed");
+                    return Ok(None);
+                }
                 Some(StatusCode::CONFLICT) => {
                     warn!(error_class = "stale_turn", %error, "turn already closed; polling again");
                     return Ok(None);
@@ -221,4 +232,145 @@ fn print_result(name: &str, winner: Team, view: &PlayerView) {
     let winner = format!("{winner:?}").to_lowercase();
     let role = format!("{:?}", view.role).to_lowercase();
     println!("{name}: game over, winner={winner} role={role} survived={survived}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mock::MockBrain;
+    use axum::{
+        Json, Router,
+        routing::{get, post},
+    };
+    use serde_json::json;
+    use std::{
+        io,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+    use werewolf_protocol::{JoinResponse, Phase, PublicPlayer, Role, TurnKind};
+
+    /// Collects formatted log lines so tests can check levels.
+    #[derive(Clone, Default)]
+    struct Logs(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for Logs {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Fake game server: one turn of `kind`, a 409 on every act, then game over.
+    async fn stale_act_server(kind: TurnKind) -> String {
+        let player = |id, name: &str| PublicPlayer {
+            id,
+            name: name.into(),
+            model: None,
+            alive: true,
+            revealed_role: None,
+            human: false,
+        };
+        let view = PlayerView {
+            you: 0,
+            role: Role::Villager,
+            phase: Phase::Day { n: 1 },
+            players: vec![player(0, "Me"), player(1, "Bob")],
+            wolf_team: vec![],
+            public_log: vec![],
+            private_log: vec![],
+        };
+        let turn = Turn {
+            turn_id: 1,
+            kind,
+            candidates: if kind == TurnKind::DayVote {
+                vec![1]
+            } else {
+                vec![]
+            },
+            deadline_ms: 30_000,
+            view: view.clone(),
+        };
+        let polls = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route(
+                "/v1/join",
+                post(|| async {
+                    Json(JoinResponse {
+                        player_id: 0,
+                        token: "t".into(),
+                    })
+                }),
+            )
+            .route(
+                "/v1/poll",
+                get(move || {
+                    let poll = if polls.fetch_add(1, Ordering::SeqCst) == 0 {
+                        Poll::Turn(turn.clone())
+                    } else {
+                        Poll::GameOver {
+                            winner: Team::Village,
+                            view: view.clone(),
+                        }
+                    };
+                    async move { Json(poll) }
+                }),
+            )
+            .route(
+                "/v1/act",
+                post(|| async {
+                    (
+                        StatusCode::CONFLICT,
+                        Json(json!({ "error": "stale turn; poll again" })),
+                    )
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        url
+    }
+
+    /// Plays one game whose only turn is stale by the time we act, returning our logs.
+    async fn logs_for_stale_act(kind: TurnKind) -> String {
+        let logs = Logs::default();
+        let writer = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_env_filter("werewolf_agent=debug")
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        // The current-thread test runtime keeps every task on this thread, so a thread-local subscriber sees them all.
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let client = GameClient::new(&stale_act_server(kind).await).unwrap();
+        let brain = Brain::Mock(MockBrain::new(Some(1)));
+        Player::new(client, brain, "Me".into(), "mock".into(), 1)
+            .run()
+            .await
+            .unwrap();
+        String::from_utf8(logs.0.lock().unwrap().clone()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn stale_chat_act_is_routine_but_stale_vote_warns() {
+        let chat = logs_for_stale_act(TurnKind::DaySpeak).await;
+        assert!(
+            chat.contains("DEBUG") && chat.contains("chat window closed"),
+            "{chat}"
+        );
+        assert!(!chat.contains("WARN"), "{chat}");
+
+        let vote = logs_for_stale_act(TurnKind::DayVote).await;
+        assert!(
+            vote.contains("WARN") && vote.contains("turn already closed"),
+            "{vote}"
+        );
+    }
 }

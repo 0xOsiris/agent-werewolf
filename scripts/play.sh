@@ -2,6 +2,7 @@
 # Starts a server plus AI players and opens the game so you can join from your browser or phone.
 # Usage: scripts/play.sh            (9 AIs, 2 wolves, starts when 1 human joins)
 #        AIS=4 HUMANS=3 WOLVES=1 scripts/play.sh
+#        HUMANS=0 scripts/play.sh   (AIs only; just watch)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -18,8 +19,8 @@ if ((AIS < 1 || AIS > ${#PLAYERS[@]})); then
   echo "AIS must be between 1 and ${#PLAYERS[@]}" >&2
   exit 1
 fi
-if ((HUMANS < 1 || total < 5 || total > 12)); then
-  echo "need HUMANS >= 1 and AIS + HUMANS between 5 and 12 (got $AIS + $HUMANS)" >&2
+if ((HUMANS < 0 || total < 5 || total > 12)); then
+  echo "need HUMANS >= 0 and AIS + HUMANS between 5 and 12 (got $AIS + $HUMANS)" >&2
   exit 1
 fi
 mock=0
@@ -90,6 +91,6 @@ EOF
 
 if command -v open >/dev/null; then
   open "$spectate"
-  open "$local_url/play"
+  ((HUMANS > 0)) && open "$local_url/play"
 fi
 wait "$server_pid"

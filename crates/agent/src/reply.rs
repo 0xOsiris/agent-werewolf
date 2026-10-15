@@ -1,7 +1,10 @@
 //! Turns a model's free-form reply into a validated action.
 
 use serde_json::{Map, Value};
-use werewolf_protocol::{Action, MAX_TEXT_LEN, PlayerId, Turn, TurnKind};
+use werewolf_protocol::{Action, PlayerId, Turn, TurnKind};
+
+/// Backstop for the prompt's 15-word limit on speech; well under the server's `MAX_TEXT_LEN`.
+pub const MAX_SAY_LEN: usize = 140;
 
 /// Backstop for the prompt's 25-word limit, so spectators get a glanceable thought.
 pub const MAX_REASONING_LEN: usize = 200;
@@ -62,7 +65,7 @@ pub fn parse(text: &str, turn: &Turn) -> Result<Decision, ReplyError> {
             .and_then(Value::as_str)
             .ok_or(ReplyError::BadSay)?;
         Action::Speak {
-            text: clean_text(say, MAX_TEXT_LEN).unwrap_or_default(),
+            text: shorten(say.trim(), MAX_SAY_LEN),
         }
     } else {
         let target = parse_target(object.get(key).ok_or(ReplyError::NoJson(key))?)?;
@@ -140,6 +143,22 @@ fn parse_target(value: &Value) -> Result<Option<PlayerId>, ReplyError> {
 fn clean_text(text: &str, max_chars: usize) -> Option<String> {
     let text = truncate(text.trim(), max_chars).trim_end();
     (!text.is_empty()).then(|| text.to_owned())
+}
+
+/// Cuts `text` to at most `max_chars` at the last word boundary and adds "…", so speech never stops mid-word.
+pub fn shorten(text: &str, max_chars: usize) -> String {
+    let head = truncate(text, max_chars);
+    if head.len() == text.len() {
+        return text.to_owned();
+    }
+    let mid_word = !head.ends_with(char::is_whitespace)
+        && !text[head.len()..].starts_with(char::is_whitespace);
+    // A single word longer than the limit has no boundary to back off to, so it gets a hard cut.
+    let cut = match head.rfind(char::is_whitespace) {
+        Some(space) if mid_word => &head[..space],
+        _ => head,
+    };
+    format!("{}…", cut.trim_end())
 }
 
 /// First `max_chars` chars of `s`; the server counts text limits in chars.
@@ -264,8 +283,8 @@ mod tests {
     }
 
     #[test]
-    fn long_text_is_truncated_by_chars() {
-        let say = "é".repeat(MAX_TEXT_LEN + 10);
+    fn long_say_is_cut_at_a_word_boundary_and_reasoning_by_chars() {
+        let say = "é".repeat(130) + " ééééé ééééé";
         let text =
             serde_json::json!({ "say": say, "reasoning": "é".repeat(MAX_REASONING_LEN + 5) })
                 .to_string();
@@ -273,7 +292,28 @@ mod tests {
         let Action::Speak { text } = decision.action else {
             panic!("expected speak")
         };
-        assert_eq!(text, "é".repeat(MAX_TEXT_LEN));
+        assert_eq!(text, "é".repeat(130) + " ééééé…");
         assert_eq!(decision.reasoning, Some("é".repeat(MAX_REASONING_LEN)));
+    }
+
+    #[test]
+    fn shorten_respects_word_boundaries() {
+        let words = |n: usize| vec!["word"; n].join(" ");
+        let short = words(28); // 139 chars
+        assert_eq!(shorten(&short, MAX_SAY_LEN), short);
+
+        let long = words(40);
+        let cut = shorten(&long, MAX_SAY_LEN);
+        assert_eq!(cut, words(28) + "…");
+        assert!(cut.chars().count() <= MAX_SAY_LEN + 1);
+
+        // The limit lands exactly before a space, so no word is lost.
+        let exact = "a".repeat(140) + " tail";
+        assert_eq!(shorten(&exact, MAX_SAY_LEN), "a".repeat(140) + "…");
+        // One endless word can only be cut hard.
+        assert_eq!(
+            shorten(&"x".repeat(200), MAX_SAY_LEN),
+            "x".repeat(140) + "…"
+        );
     }
 }

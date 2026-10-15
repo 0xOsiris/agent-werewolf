@@ -19,6 +19,7 @@ use werewolf_protocol::{
 };
 
 use crate::{
+    chat::{ChatRules, Limits},
     config::Config,
     driver,
     engine::{Answer, Game, TurnSpec},
@@ -26,7 +27,7 @@ use crate::{
     game_log::{GameLog, GameSummary, PlayerSummary},
     sanitize,
     site::Site,
-    spectator::{Broadcast, PendingTurn, RoleEntry, SpectatorEvent, Viewer},
+    spectator::{Broadcast, ChatState, PendingTurn, RoleEntry, SpectatorEvent, Viewer},
 };
 
 /// Events a slow spectator may fall behind before it gets a fresh snapshot.
@@ -60,7 +61,11 @@ struct Inner {
     seats: Vec<Seat>,
     roles: Vec<Role>,
     feed: Vec<SpectatorEvent>,
+    /// The open chat window and when it ends.
+    chat: Option<(TurnKind, Instant)>,
     next_turn_id: u64,
+    /// Orders answers by arrival, so chat posts publish in the order they came in.
+    next_answer_seq: u64,
     games_started: u64,
     log: Option<GameLog>,
     events: broadcast::Sender<Arc<Broadcast>>,
@@ -102,6 +107,7 @@ struct Pending {
 struct Submitted {
     action: Action,
     reasoning: Option<String>,
+    seq: u64,
 }
 
 /// One turn's outcome as handed to the driver.
@@ -132,7 +138,9 @@ impl AppState {
                 seats: Vec::new(),
                 roles: Vec::new(),
                 feed: Vec::new(),
+                chat: None,
                 next_turn_id: 1,
+                next_answer_seq: 0,
                 games_started: 0,
                 log: None,
                 events,
@@ -244,7 +252,7 @@ impl AppState {
         }
         let seed = self.seed.wrapping_add(inner.games_started);
         let roster = inner.seats.iter().map(|s| s.public.clone()).collect();
-        let (game, events) = Game::new(roster, self.config.speak_rounds, seed)
+        let (game, events) = Game::new(roster, self.config.wolves, seed)
             .map_err(|err| HttpError::conflict(err.to_string()))?;
 
         inner.games_started += 1;
@@ -292,6 +300,7 @@ impl AppState {
         inner.seats.clear();
         inner.roles.clear();
         inner.feed.clear();
+        inner.chat = None;
         inner.log = None;
         inner.publish(SpectatorEvent::Reset);
         drop(inner);
@@ -336,9 +345,11 @@ impl AppState {
     /// Validates and records an answer to the player's pending turn.
     pub fn act(&self, token: &str, body: Result<ActRequest, HttpError>) -> Result<(), HttpError> {
         let mut inner = self.inner.lock();
+        let seq = inner.next_answer_seq;
+        inner.next_answer_seq += 1;
         let seat = inner.seat_mut(token).ok_or(HttpError::Unauthorized)?;
         let player = seat.public.id;
-        let kind = match seat.accept(body) {
+        let kind = match seat.accept(body, seq) {
             Ok(kind) => kind,
             Err(err) => {
                 // Late answers after a timeout are already counted as timeouts.
@@ -348,11 +359,14 @@ impl AppState {
                 return Err(err);
             }
         };
-        inner.publish(SpectatorEvent::TurnEnded {
-            player,
-            kind,
-            timed_out: false,
-        });
+        // Chat turns are shown through `chat_window`, not per-turn events.
+        if !is_chat(kind) {
+            inner.publish(SpectatorEvent::TurnEnded {
+                player,
+                kind,
+                timed_out: false,
+            });
+        }
         drop(inner);
         self.answered.notify_one();
         Ok(())
@@ -477,6 +491,106 @@ impl AppState {
         next
     }
 
+    pub(crate) fn chat_rules(&self) -> ChatRules {
+        let config = &self.config;
+        ChatRules {
+            human: Limits {
+                cooldown: config.chat_cooldown_secs,
+                max_messages: config.max_chat_messages,
+            },
+            ai: Limits {
+                cooldown: config.ai_chat_cooldown_secs,
+                max_messages: config.ai_max_chat_messages,
+            },
+            ai_jitter: config.ai_chat_jitter_secs,
+            quiet: config.quiet_secs,
+        }
+    }
+
+    pub(crate) fn chat_length(&self, kind: TurnKind) -> Duration {
+        match kind {
+            TurnKind::WolfChat => self.config.wolf_chat_secs,
+            _ => self.config.discussion_secs,
+        }
+    }
+
+    /// `players` paired with whether each is human.
+    pub(crate) fn chat_members(&self, players: &[PlayerId]) -> Vec<(PlayerId, bool)> {
+        let inner = self.inner.lock();
+        players
+            .iter()
+            .map(|&p| {
+                let human = inner.seats.get(p as usize).is_some_and(|s| s.public.human);
+                (p, human)
+            })
+            .collect()
+    }
+
+    /// Hands chat turns to `players`, each lasting until the window `ends`.
+    pub(crate) fn issue_chat_turns(
+        &self,
+        game: &Game,
+        kind: TurnKind,
+        players: &[PlayerId],
+        ends: Instant,
+    ) {
+        let mut inner = self.inner.lock();
+        for &player in players {
+            let turn_id = inner.next_turn_id;
+            inner.next_turn_id += 1;
+            let (Some(seat), Some(view)) =
+                (inner.seats.get_mut(player as usize), game.view(player))
+            else {
+                error!(
+                    player,
+                    "chat turn for a seat the server does not know; skipping"
+                );
+                continue;
+            };
+            seat.answer = None;
+            seat.pending = Some(Pending {
+                turn: Turn {
+                    turn_id,
+                    kind,
+                    candidates: Vec::new(),
+                    deadline_ms: remaining_ms(ends),
+                    view,
+                },
+                deadline: ends,
+            });
+        }
+        drop(inner);
+        self.bump();
+    }
+
+    /// Answers that have arrived from `players`, in arrival order.
+    pub(crate) fn take_answers(&self, kind: TurnKind, players: &[PlayerId]) -> Vec<Collected> {
+        self.inner.lock().take_answers(kind, players)
+    }
+
+    /// Cancels open chat turns (closing is not a timeout) and returns answers that raced the close.
+    pub(crate) fn cancel_chat(&self, kind: TurnKind, players: &[PlayerId]) -> Vec<Collected> {
+        let mut inner = self.inner.lock();
+        for &player in players {
+            if let Some(seat) = inner.seats.get_mut(player as usize) {
+                seat.pending = None;
+            }
+        }
+        let leftovers = inner.take_answers(kind, players);
+        drop(inner);
+        self.bump();
+        leftovers
+    }
+
+    /// Waits for the next answer or `until`. False on shutdown.
+    pub(crate) async fn wait_for_answer(&self, until: Instant) -> bool {
+        tokio::select! {
+            () = self.answered.notified() => true,
+            () = tokio::time::sleep_until(until) => true,
+            () = self.shutdown.cancelled() => false,
+        }
+    }
+
     /// Takes the answers; expired turns yield `None`, the default action.
     pub(crate) fn collect_answers(&self, turns: &[TurnSpec]) -> Vec<Collected> {
         let mut inner = self.inner.lock();
@@ -574,10 +688,44 @@ impl Inner {
         self.seats.iter_mut().find(|s| s.token == token)
     }
 
+    fn take_answers(&mut self, kind: TurnKind, players: &[PlayerId]) -> Vec<Collected> {
+        let mut answers: Vec<(u64, Collected)> = players
+            .iter()
+            .filter_map(|&player| {
+                let submitted = self.seats.get_mut(player as usize)?.answer.take()?;
+                Some((
+                    submitted.seq,
+                    Collected {
+                        answer: Answer {
+                            player,
+                            action: Some(submitted.action),
+                        },
+                        kind,
+                        reasoning: submitted.reasoning,
+                    },
+                ))
+            })
+            .collect();
+        answers.sort_by_key(|(seq, _)| *seq);
+        answers
+            .into_iter()
+            .map(|(_, collected)| collected)
+            .collect()
+    }
+
     /// Logs, records, and broadcasts a spectator event.
     fn publish(&mut self, event: SpectatorEvent) {
-        if let SpectatorEvent::Public { event } = &event {
-            self.apply(event);
+        match &event {
+            SpectatorEvent::Public { event } => self.apply(event),
+            SpectatorEvent::ChatWindow {
+                kind,
+                open,
+                ends_in_ms,
+            } => {
+                let ends = Instant::now() + Duration::from_millis(*ends_in_ms);
+                self.chat = open.then_some((*kind, ends));
+            }
+            _ => {}
         }
         let Some(json) = to_json(&event) else { return };
         if let Some(log) = &self.log {
@@ -631,22 +779,33 @@ impl Inner {
                 .filter_map(|s| {
                     let pending = s.pending.as_ref()?;
                     let kind = pending.turn.kind;
-                    viewer
-                        .sees_turn(s.public.id, kind, roles)
-                        .then(|| PendingTurn {
+                    (!is_chat(kind) && viewer.sees_turn(s.public.id, kind, roles)).then(|| {
+                        PendingTurn {
                             player: s.public.id,
                             kind,
                             deadline_ms: remaining_ms(pending.deadline),
-                        })
+                        }
+                    })
                 })
                 .collect(),
+            chat: self
+                .chat
+                .filter(|&(kind, _)| viewer.sees_chat(kind, roles))
+                .map(|(kind, ends)| ChatState {
+                    kind,
+                    ends_in_ms: remaining_ms(ends),
+                }),
         }
     }
 }
 
 impl Seat {
     /// Checks an answer against the pending turn and stores it; returns the turn kind.
-    fn accept(&mut self, body: Result<ActRequest, HttpError>) -> Result<TurnKind, HttpError> {
+    fn accept(
+        &mut self,
+        body: Result<ActRequest, HttpError>,
+        seq: u64,
+    ) -> Result<TurnKind, HttpError> {
         let req = body?;
         let pending = self
             .pending
@@ -654,7 +813,7 @@ impl Seat {
             .filter(|p| p.turn.turn_id == req.turn_id)
             .ok_or_else(|| HttpError::conflict("stale turn; poll again"))?;
         let kind = pending.turn.kind;
-        let speaks = matches!(kind, TurnKind::DaySpeak | TurnKind::WolfChat);
+        let speaks = is_chat(kind);
         let action = match (speaks, req.action) {
             (true, Action::Speak { text }) => Action::Speak {
                 text: sanitize::text(&text, MAX_TEXT_LEN),
@@ -679,9 +838,17 @@ impl Seat {
             .map(|r| sanitize::text(&r, MAX_TEXT_LEN))
             .filter(|r| !r.is_empty());
         self.pending = None;
-        self.answer = Some(Submitted { action, reasoning });
+        self.answer = Some(Submitted {
+            action,
+            reasoning,
+            seq,
+        });
         Ok(kind)
     }
+}
+
+fn is_chat(kind: TurnKind) -> bool {
+    matches!(kind, TurnKind::DaySpeak | TurnKind::WolfChat)
 }
 
 fn role_entries(roles: &[Role]) -> Vec<RoleEntry> {
@@ -707,6 +874,6 @@ fn remaining_ms(deadline: Instant) -> u64 {
     millis(deadline.saturating_duration_since(Instant::now()))
 }
 
-fn millis(duration: Duration) -> u64 {
+pub(crate) fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }

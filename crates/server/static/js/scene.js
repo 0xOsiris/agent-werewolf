@@ -38,16 +38,17 @@ function outlined(src, color = DARK) {
   return out;
 }
 
-/** Bresenham line of 1px squares. */
-function pixLine(ctx, x0, y0, x1, y1) {
+/** Bresenham line drawn with a `w`-pixel square brush. */
+function pixLine(ctx, x0, y0, x1, y1, w = 1) {
   x0 = Math.round(x0); y0 = Math.round(y0); x1 = Math.round(x1); y1 = Math.round(y1);
   const dx = Math.abs(x1 - x0);
   const dy = -Math.abs(y1 - y0);
   const sx = x0 < x1 ? 1 : -1;
   const sy = y0 < y1 ? 1 : -1;
   let err = dx + dy;
+  const off = Math.floor((w - 1) / 2);
   for (let i = 0; i < 2000; i++) {
-    ctx.fillRect(x0, y0, 1, 1);
+    ctx.fillRect(x0 - off, y0 - off, w, w);
     if (x0 === x1 && y0 === y1) break;
     const e2 = 2 * err;
     if (e2 >= dy) { err += dy; x0 += sx; }
@@ -211,7 +212,7 @@ export class Scene {
    * `root`: sized container. `game`: events.Game. Options: `you()` returns the viewer's id,
    * `onPick(id)` makes candidate sprites tappable.
    */
-  constructor(root, game, { you = () => null, onPick = null } = {}) {
+  constructor(root, game, { you = () => null, onPick = null, chatBanner = false } = {}) {
     this.root = root;
     this.game = game;
     this.you = you;
@@ -221,13 +222,19 @@ export class Scene {
     this.canvas.className = "stage-canvas";
     this.overlay = el("div", "stage-overlay");
     this.toasts = el("div", "stage-toasts");
-    this.stage.append(this.canvas, this.overlay, this.toasts);
+    this.chatBar = el("div", "chat-banner");
+    this.chatBar.hidden = true;
+    this.showChat = chatBanner;
+    this.top = el("div", "stage-top");
+    this.top.append(this.chatBar, this.toasts);
+    this.stage.append(this.canvas, this.overlay, this.top);
     root.appendChild(this.stage);
     this.ctx = this.canvas.getContext("2d");
     this.actors = new Map();
     this.effects = [];
     this.particles = [];
-    this.voteBorn = new Map();
+    // Vote arrows outlive their phase: they stay until the result is announced, then fade.
+    this.arrows = { day: null, wolf: null };
     this.z = 1;
     this.night = 0;
     this.W = 0;
@@ -291,7 +298,7 @@ export class Scene {
     }
     // Small banner glyphs are ~4.5% of the stage height; toasts sit just below it.
     this.bannerScale = clamp(Math.round(Math.max(14, H * vp * 0.045) / (7 * vp)), 1, 3);
-    this.toasts.style.top = (8 + 10 * this.bannerScale) * vp + "px";
+    this.top.style.top = (8 + 10 * this.bannerScale) * vp + "px";
     this.buildBackground();
     this.layout(true);
   }
@@ -543,6 +550,7 @@ export class Scene {
         this.clearTransient();
         this.sync(false);
         this.night = this.nightTarget();
+        this.arrowsFromState();
         this.banner = { text: this.bannerText(), at: -1e9 };
         this.overAt = this.game.state.phase.kind === "over" ? now - 5000 : null;
         for (const a of this.actors.values()) a.form = this.wantsWolf(a.id) ? "wolf" : "human";
@@ -569,7 +577,7 @@ export class Scene {
     switch (ev.type) {
       case "phase_started":
         this.banner = { text: this.bannerText(), at: now };
-        this.voteBorn.clear();
+        if (ev.phase.kind === "night") this.fadeArrows("day", 600);
         for (const a of this.actors.values()) {
           if (!a.speech && !a.thought) continue;
           a.speech = null;
@@ -586,23 +594,59 @@ export class Scene {
       case "reasoning":
         this.say(ev.player, ev.text, "thought");
         break;
+      case "voted":
+        this.arrowSet("day").votes.push({ voter: ev.voter, target: ev.target, born: now });
+        break;
+      case "wolf_voted":
+        this.arrowSet("wolf").votes.push({ voter: ev.voter, target: ev.target, born: now });
+        break;
+      case "shot":
+        // Muzzle flash, tracer, hit flash; the target's death follows as its own event.
+        this.effects.push({ type: "shot", id: ev.sheriff, target: ev.target, start: now, dur: 900 });
+        this.shotLandsAt = now + 650;
+        this.sync(false);
+        break;
       case "died": {
         const a = actor(ev.player);
+        const name = this.game.nameOf(ev.player);
+        const role = ROLE_LABEL[ev.role] || ev.role;
         if (a) {
+          // The dead stop talking; their bubbles would also hide the death effects.
+          this.retireStack(a, now);
           a.deathCause = ev.cause;
-          a.deathAt = now + (ev.cause === "vote" ? 1500 : 900);
+          const delay = { vote: 1500, night: 900, shot: 250, backfire: 700 }[ev.cause] ?? 900;
+          a.deathAt = Math.max(now + delay, ev.cause === "shot" ? this.shotLandsAt || 0 : 0);
           if (ev.cause === "night") this.effects.push({ type: "slash", id: ev.player, start: now, dur: 1100 });
+          if (ev.cause === "backfire") {
+            this.effects.push({ type: "misfire", id: ev.player, start: now, dur: 2000 });
+            this.puff(Math.round(a.x), Math.round(a.y) - 12, 16, ["#c0cbdc", "#8a8fa6", "#5d6482"]);
+          }
         }
+        // Arrows keep pointing at the victim through the slash or the fall, then fade.
+        if (ev.cause === "night") this.fadeArrows("wolf", 1800);
+        else if (ev.cause === "vote") this.fadeArrows("day", 2600);
         this.sync(false);
-        const how = ev.cause === "night" ? " was killed in the night" : " was eliminated";
-        this.toast(this.game.nameOf(ev.player) + how + " — " + (ROLE_LABEL[ev.role] || ev.role), "death");
+        if (ev.cause === "shot") {
+          const shot = this.game.state.lastShot;
+          const sheriff = shot ? this.game.nameOf(shot.sheriff) : "the sheriff";
+          this.toast("Sheriff " + sheriff + " shot " + name + " — "
+            + (ev.role === "werewolf" ? "Werewolf!" : role + ". The sheriff dies too."), "death");
+        } else if (ev.cause !== "backfire") {
+          const how = ev.cause === "night" ? " was killed in the night" : " was eliminated";
+          this.toast(name + how + " — " + role, "death");
+        }
         break;
       }
-      case "peaceful_night":
+      case "peaceful_night": {
         this.toast("Nobody died last night", "quiet");
+        const saved = this.wolfTarget();
+        if (saved !== null) this.effects.push({ type: "shield", id: saved, start: now, dur: 2600 });
+        this.fadeArrows("wolf", 1800);
         break;
+      }
       case "no_elimination":
         this.toast("No one was eliminated", "quiet");
+        this.fadeArrows("day", 1500);
         break;
       case "game_over":
         this.overAt = now;
@@ -620,7 +664,7 @@ export class Scene {
 
   clearTransient() {
     this.effects = [];
-    this.voteBorn.clear();
+    this.arrows = { day: null, wolf: null };
     for (const a of this.actors.values()) {
       a.speech = null;
       a.thought = null;
@@ -629,6 +673,38 @@ export class Scene {
       a.deathAt = null;
     }
     this.toasts.replaceChildren();
+  }
+
+  /** The open arrow set for `kind`, starting a fresh one if the last is fading. */
+  arrowSet(kind) {
+    const set = this.arrows[kind];
+    if (set && set.fadeAt === null) return set;
+    return (this.arrows[kind] = { votes: [], fadeAt: null });
+  }
+
+  fadeArrows(kind, delay) {
+    const set = this.arrows[kind];
+    if (set && set.fadeAt === null) set.fadeAt = performance.now() + delay;
+  }
+
+  arrowsFromState() {
+    const s = this.game.state;
+    const set = (votes) => ({ votes: votes.map((v) => ({ ...v, born: -1e9 })), fadeAt: null });
+    this.arrows = {
+      day: s.phase.kind === "day" && s.votes.length ? set(s.votes) : null,
+      wolf: s.phase.kind === "night" && s.wolfVotes.length ? set(s.wolfVotes) : null,
+    };
+  }
+
+  /** The player most wolves pointed at tonight, or null. */
+  wolfTarget() {
+    const set = this.arrows.wolf;
+    if (!set) return null;
+    const counts = new Map();
+    for (const v of set.votes) if (v.target !== null) counts.set(v.target, (counts.get(v.target) || 0) + 1);
+    let best = null;
+    for (const [id, n] of counts) if (best === null || n > counts.get(best)) best = id;
+    return best;
   }
 
   bannerText() {
@@ -657,17 +733,16 @@ export class Scene {
     const now = performance.now();
     const until = now + clamp(2600 + text.length * 55, 3500, 11000);
     const speech = kind !== "thought";
-    // One speech and one thought on stage at a time; older ones fade out. A new speech also
-    // clears thoughts, since its own reasoning follows right after it.
+    // One thought on stage at a time. A new speech also clears thoughts, since its own
+    // reasoning follows right after it.
     for (const b of this.actors.values()) {
-      if (speech && b !== a && b.speech) this.retire(b.speech, now);
-      if (b.thought && (speech || b !== a)) this.retire(b.thought, now);
+      if (b.thought && !b.thought.leaving && (speech || b !== a)) this.retire(b.thought, now);
     }
     if (speech) {
       const node = el("div", kind === "wolf" ? "speech wolf" : "speech");
       if (kind === "wolf") node.appendChild(el("div", "bubble-tag", "wolves only"));
       node.appendChild(el("div", "bubble-text", text));
-      a.speech = { node, until };
+      a.speech = { node, until, at: now };
       a.talkUntil = now + clamp(text.length * 45, 1200, 4500);
     } else {
       const role = this.game.state.roles[id];
@@ -678,9 +753,47 @@ export class Scene {
     }
     a.stack.style.zIndex = String(++this.z);
     this.renderStack(a);
+    this.makeRoom(a, now);
+  }
+
+  /**
+   * Open chat lets several players talk at once: keep up to three speech bubbles, dropping any
+   * older bubble the new one would cover, then the oldest beyond three.
+   */
+  makeRoom(a, now) {
+    a.stack.hidden = false;
+    a.stackSize = { w: a.stack.offsetWidth, h: a.stack.offsetHeight };
+    const mine = this.stackRect(a);
+    const others = [...this.actors.values()]
+      .filter((b) => b !== a && b.speech && !b.speech.leaving)
+      .sort((p, q) => p.speech.at - q.speech.at);
+    const kept = [];
+    for (const b of others) {
+      const r = this.stackRect(b);
+      const hit = r && r.left < mine.right && mine.left < r.right && r.top < mine.bottom && mine.top < r.bottom;
+      if (hit) this.retireStack(b, now);
+      else kept.push(b);
+    }
+    for (const b of kept.slice(0, Math.max(0, kept.length - 2))) this.retireStack(b, now);
+  }
+
+  retireStack(b, now) {
+    if (b.speech) this.retire(b.speech, now);
+    if (b.thought) this.retire(b.thought, now);
+  }
+
+  /** Where `a`'s bubble stack sits in stage CSS px (bottom-centre anchored above the head). */
+  stackRect(a) {
+    if (!a.stackSize) return null;
+    const vp = this.vp;
+    const { w, h } = a.stackSize;
+    const cx = clamp(a.x * vp, w / 2 + 4, this.W * vp - w / 2 - 4);
+    const bottom = Math.max((a.y - 27) * vp, h + 4);
+    return { left: cx - w / 2, right: cx + w / 2, top: bottom - h, bottom, cx };
   }
 
   retire(bubble, now) {
+    bubble.leaving = true;
     bubble.node.classList.add("leaving");
     bubble.until = Math.min(bubble.until, now + 200);
   }
@@ -699,6 +812,16 @@ export class Scene {
     while (this.toasts.children.length > 3) this.toasts.firstChild.remove();
     setTimeout(() => node.classList.add("fade"), 4500);
     setTimeout(() => node.remove(), 5200);
+  }
+
+  renderChatBar() {
+    const chat = this.game.state.chat;
+    this.chatBar.hidden = !chat;
+    if (!chat) return;
+    const text = (chat.kind === "wolf_chat" ? "Wolf chat · " : "Open discussion · ")
+      + clock(chat.endsAt - performance.now()) + " left";
+    if (this.chatBar.textContent !== text) this.chatBar.textContent = text;
+    this.chatBar.classList.toggle("wolf", chat.kind === "wolf_chat");
   }
 
   /** Candidate ids to highlight (null clears), plus the currently selected id. */
@@ -796,6 +919,7 @@ export class Scene {
     this.drawEffects(t);
     this.drawBanner(t);
     this.placeDom(players);
+    if (this.showChat) this.renderChatBar();
   }
 
   drawActor(a, t, p) {
@@ -842,10 +966,12 @@ export class Scene {
     if (a.form === "wolf") {
       img = talking && Math.floor(t / 130) % 2 ? a.sprites.wolfTalk
         : (t + a.phase * 500) % 1600 < 220 ? a.sprites.wolfGlow : a.sprites.wolf;
-    } else if (talking) {
-      img = Math.floor(t / 140) % 2 ? a.sprites.talk : a.sprites.idle;
     } else {
-      img = (t + a.phase * 997) % 4200 < 150 ? a.sprites.blink : a.sprites.idle;
+      // Sheriffs wear the hat and star wherever their role is known (spectators, or once revealed).
+      const sheriff = (this.game.state.roles[a.id] || p.revealed_role) === "sheriff";
+      const idle = sheriff ? a.sprites.sheriffIdle : a.sprites.idle;
+      if (talking) img = Math.floor(t / 140) % 2 ? (sheriff ? a.sprites.sheriffTalk : a.sprites.talk) : idle;
+      else img = (t + a.phase * 997) % 4200 < 150 ? (sheriff ? a.sprites.sheriffBlink : a.sprites.blink) : idle;
     }
     const bob = !dying && Math.sin(t * 0.0035 + a.phase) > 0.35 ? 1 : 0;
     this.drawShadow(x, y, a.form === "wolf" ? 10 : 8);
@@ -932,48 +1058,68 @@ export class Scene {
   }
 
   drawVotes(t) {
-    const s = this.game.state;
-    const lists = [];
-    if (s.phase.kind === "day" || s.phase.kind === "over") lists.push([s.votes, "#ffd23f", "day"]);
-    if (s.phase.kind === "night") lists.push([s.wolfVotes, "#ff4d5e", "wolf"]);
     const now = performance.now();
-    const ctx = this.ctx;
-    for (const [votes, color, tag] of lists) {
-      votes.forEach((v, i) => {
-        if (v.target === null) return;
-        const from = this.actors.get(v.voter);
-        const to = this.actors.get(v.target);
-        if (!from || !to) return;
-        const key = tag + i + ":" + v.voter;
-        if (!this.voteBorn.has(key)) this.voteBorn.set(key, now);
-        const k = clamp((now - this.voteBorn.get(key)) / 350, 0, 1);
-        const x0 = from.x;
-        const y0 = from.y - 12;
-        const len = Math.hypot(to.x - x0, to.y - 12 - y0);
-        if (len < 1) return;
-        const ux = (to.x - x0) / len;
-        const uy = (to.y - 12 - y0) / len;
-        const end = Math.max(0, len - 9) * k;
-        const x1 = x0 + ux * 7 + ux * Math.max(0, end - 7);
-        const y1 = y0 + uy * 7 + uy * Math.max(0, end - 7);
-        const sx = x0 + ux * 7;
-        const sy = y0 + uy * 7;
-        const recent = i === votes.length - 1;
-        ctx.globalAlpha = recent ? 1 : 0.75;
-        ctx.fillStyle = DARK;
-        pixLine(ctx, sx, sy + 1, x1, y1 + 1);
-        ctx.fillStyle = color;
-        pixLine(ctx, sx, sy, x1, y1);
-        if (k >= 1) {
-          for (const ang of [2.5, -2.5]) {
-            const hx = x1 + (ux * Math.cos(ang) - uy * Math.sin(ang)) * 4;
-            const hy = y1 + (ux * Math.sin(ang) + uy * Math.cos(ang)) * 4;
-            pixLine(ctx, x1, y1, hx, hy);
-          }
+    for (const kind of ["day", "wolf"]) {
+      const set = this.arrows[kind];
+      if (!set) continue;
+      let alpha = 1;
+      if (set.fadeAt !== null && now > set.fadeAt) {
+        alpha = 1 - (now - set.fadeAt) / 1000;
+        if (alpha <= 0) {
+          this.arrows[kind] = null;
+          continue;
         }
-        ctx.globalAlpha = 1;
+      }
+      set.votes.forEach((v, i) => {
+        const recent = i === set.votes.length - 1;
+        this.drawArrow(v, kind === "wolf", alpha * (recent || kind === "wolf" ? 1 : 0.75), now, t);
       });
     }
+    this.ctx.globalAlpha = 1;
+  }
+
+  /** Voter-to-target arrow; kill arrows are thicker, red, and pulse. */
+  drawArrow(v, kill, alpha, now, t) {
+    if (v.target === null) return;
+    const from = this.actors.get(v.voter);
+    const to = this.actors.get(v.target);
+    if (!from || !to) return;
+    const ctx = this.ctx;
+    const k = clamp((now - v.born) / 350, 0, 1);
+    const x0 = from.x;
+    const y0 = from.y - 12;
+    const len = Math.hypot(to.x - x0, to.y - 12 - y0);
+    if (len < 1) return;
+    const ux = (to.x - x0) / len;
+    const uy = (to.y - 12 - y0) / len;
+    const end = Math.max(0, len - 9) * k;
+    const sx = x0 + ux * 7;
+    const sy = y0 + uy * 7;
+    const x1 = sx + ux * Math.max(0, end - 7);
+    const y1 = sy + uy * Math.max(0, end - 7);
+    const w = kill ? 2 : 1;
+    const head = (dy, width) => {
+      if (k < 1) return;
+      for (const ang of [2.5, -2.5]) {
+        const hx = x1 + (ux * Math.cos(ang) - uy * Math.sin(ang)) * (kill ? 6 : 4);
+        const hy = y1 + (ux * Math.sin(ang) + uy * Math.cos(ang)) * (kill ? 6 : 4);
+        pixLine(ctx, x1, y1 + dy, hx, hy + dy, width);
+      }
+    };
+    if (kill) {
+      ctx.globalAlpha = alpha * (0.3 + 0.25 * Math.sin(t * 0.008));
+      ctx.fillStyle = "#ff4d5e";
+      pixLine(ctx, sx, sy, x1, y1, 5);
+      head(0, 5);
+    }
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = DARK;
+    pixLine(ctx, sx, sy + 1, x1, y1 + 1, w);
+    head(1, w);
+    ctx.fillStyle = kill ? "#ff4d5e" : "#ffd23f";
+    pixLine(ctx, sx, sy, x1, y1, w);
+    head(0, w);
+    ctx.globalAlpha = 1;
   }
 
   drawEffects(t) {
@@ -986,7 +1132,15 @@ export class Scene {
       const k = (now - e.start) / e.dur;
       const x = Math.round(a.x);
       const y = Math.round(a.y);
-      if (e.type === "slash") {
+      if (e.type === "shot") {
+        this.drawShot(e, a, now);
+      } else if (e.type === "misfire") {
+        ctx.globalAlpha = k > 0.8 ? (1 - k) / 0.2 : 1;
+        const txt = pixelText("MISFIRE!", "#ff8a3d");
+        const top = Math.max(y - 40 - Math.round(k * 6), 5 + 10 * this.bannerScale);
+        ctx.drawImage(txt, clamp(x - Math.round(txt.width / 2), 1, this.W - txt.width - 1), top);
+        ctx.globalAlpha = 1;
+      } else if (e.type === "slash") {
         ctx.globalAlpha = k < 0.6 ? 1 : 1 - (k - 0.6) / 0.4;
         for (let i = 0; i < 3; i++) {
           const p = clamp(k * 4 - i * 0.5, 0, 1);
@@ -1013,6 +1167,51 @@ export class Scene {
         const txt = pixelText(e.wolf ? "WOLF!" : "NOT WOLF", e.wolf ? "#ff4d5e" : "#3ddc97");
         ctx.drawImage(txt, clamp(x - Math.round(txt.width / 2), 1, this.W - txt.width - 1), top);
         ctx.globalAlpha = 1;
+      }
+    }
+  }
+
+  /** Sheriff's shot: flash at the gun, a tracer to the target, then a hit burst. */
+  drawShot(e, a, now) {
+    const b = this.actors.get(e.target);
+    if (!b) return;
+    const ctx = this.ctx;
+    const ms = now - e.start;
+    const dir = b.x >= a.x ? 1 : -1;
+    const x0 = Math.round(a.x + dir * 8);
+    const y0 = Math.round(a.y - 11);
+    const x1 = Math.round(b.x);
+    const y1 = Math.round(b.y - 12);
+    if (ms < 180) {
+      const r = ms < 90 ? 4 : 2;
+      ctx.fillStyle = "#fff3b0";
+      ctx.fillRect(x0 - r, y0, r * 2 + 1, 1);
+      ctx.fillRect(x0, y0 - r, 1, r * 2 + 1);
+      ctx.fillStyle = "#ffcd3c";
+      for (const [dx, dy] of [[-2, -2], [2, -2], [-2, 2], [2, 2]]) ctx.fillRect(x0 + dx, y0 + dy, 1, 1);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(x0 - 1, y0 - 1, 3, 3);
+    }
+    if (ms >= 80 && ms < 520) {
+      const p = clamp((ms - 80) / 360, 0, 1);
+      const tail = Math.max(0, p - 0.3);
+      ctx.fillStyle = "#ffcd3c";
+      pixLine(ctx, x0 + (x1 - x0) * tail, y0 + (y1 - y0) * tail, x0 + (x1 - x0) * p, y0 + (y1 - y0) * p, 2);
+      ctx.fillStyle = "#ffffff";
+      pixLine(ctx, x0 + (x1 - x0) * Math.max(tail, p - 0.08), y0 + (y1 - y0) * Math.max(tail, p - 0.08),
+        x0 + (x1 - x0) * p, y0 + (y1 - y0) * p);
+    }
+    if (ms >= 440 && ms < 900) {
+      const q = (ms - 440) / 460;
+      const r = Math.round(2 + q * 8);
+      ctx.globalAlpha = 1 - q;
+      ctx.fillStyle = q < 0.3 ? "#ffffff" : "#ff4d5e";
+      this.ring(x1, y1, r, r);
+      ctx.fillRect(x1 - 1, y1 - 1, 3, 3);
+      ctx.globalAlpha = 1;
+      if (!e.burst) {
+        e.burst = true;
+        this.puff(x1, y1, 14, ["#ffffff", "#ff4d5e", "#ffcd3c"]);
       }
     }
   }
@@ -1101,7 +1300,6 @@ export class Scene {
   placeDom(players) {
     const vp = this.vp;
     const now = performance.now();
-    const stageW = this.W * vp;
     for (const p of players) {
       const a = this.actors.get(p.id);
       if (!a) continue;
@@ -1118,10 +1316,9 @@ export class Scene {
         // Unhide before measuring: a display:none stack measures 0x0.
         a.stack.hidden = false;
         if (!a.stackSize) a.stackSize = { w: a.stack.offsetWidth, h: a.stack.offsetHeight };
-        const { w, h } = a.stackSize;
-        const bx = clamp(x, w / 2 + 4, stageW - w / 2 - 4);
-        setPos(a.stack, bx, Math.max((a.y - 27) * vp, h + 4));
-        a.stack.style.setProperty("--tail", Math.round(clamp(x - bx + w / 2, 14, w - 14)) + "px");
+        const r = this.stackRect(a);
+        setPos(a.stack, r.cx, r.bottom);
+        a.stack.style.setProperty("--tail", Math.round(clamp(x - r.left, 14, a.stackSize.w - 14)) + "px");
       } else if (!a.stack.hidden) {
         a.stack.hidden = true;
       }
@@ -1136,6 +1333,12 @@ export class Scene {
       }
     }
   }
+}
+
+/** "1:42" for a millisecond countdown. */
+export function clock(ms) {
+  const secs = Math.max(0, Math.ceil(ms / 1000));
+  return Math.floor(secs / 60) + ":" + String(secs % 60).padStart(2, "0");
 }
 
 /** Shortens to about `max` characters at a word boundary; the feed keeps the full text. */
