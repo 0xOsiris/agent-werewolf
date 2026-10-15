@@ -759,8 +759,9 @@ export class Scene {
     const a = this.actors.get(id);
     if (!a) return;
     const now = performance.now();
-    const until = now + clamp(2600 + text.length * 55, 3500, 11000);
     const speech = kind !== "thought";
+    // Speech stays until newer speech pushes it out (see makeRoom) or the phase changes.
+    const until = speech ? Infinity : now + clamp(2600 + text.length * 55, 3500, 11000);
     // One thought on stage at a time. A new speech also clears thoughts, since its own
     // reasoning follows right after it.
     for (const b of this.actors.values()) {
