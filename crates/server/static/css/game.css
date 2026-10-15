@@ -646,3 +646,27 @@ body.has-action .spacer-for-action { height: 50vh; }
   body.has-action .spacer-for-action { height: 0; }
   .chat-log { max-height: 40vh; }
 }
+
+
+/* ------------------------------------------------------------ roles guide */
+
+.guide-open { padding: 4px 12px; font-size: 15px; }
+dialog.guide {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  padding: 0;
+  border: 3px solid var(--ink);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 16px;
+  overflow: auto;
+}
+dialog.guide::backdrop { background: rgba(0, 0, 0, 0.6); }
+.guide-body { padding: 16px 20px 20px; }
+.guide-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.guide h2 { margin: 0; font-family: var(--mono); font-size: 20px; text-transform: uppercase; }
+.guide dl { margin: 8px 0 0; }
+.guide dt { margin-top: 12px; font-weight: 800; }
+.guide dd { margin: 2px 0 0; color: var(--muted); }
+.guide-rules { margin-top: 16px; padding-top: 4px; border-top: 2px solid var(--border); }
