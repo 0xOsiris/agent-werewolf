@@ -8,7 +8,7 @@ const ROLES = [
 ];
 const RULES = [
   ["Night", "Wolves pick a victim. The seer and doctor act in secret."],
-  ["Day", "The night's death is announced. Everyone talks, the sheriff may shoot, then everyone votes. Most votes is out; a tie saves everyone."],
+  ["Day", "The night's death is announced. Everyone talks, and the sheriff may shoot at any moment. Then everyone votes. Most votes is out; a tie saves everyone."],
   ["Lovers", "If one Lover dies, so does the other. A wolf and a villager in love win only as the last two alive."],
   ["Winning", "The village wins when every wolf is dead. Wolves win when they equal or outnumber everyone else, or reach day 10."],
   ["Death", "Dead players' roles are revealed. Once two are dead, ghosts chat in the Graveyard by day; the living never see it."],

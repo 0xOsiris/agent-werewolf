@@ -559,7 +559,8 @@ impl AppState {
             .collect()
     }
 
-    /// Hands chat turns to `players`, each lasting until the window `ends`.
+    /// Hands chat turns to `players`, each lasting until the window `ends`; the armed sheriff's
+    /// turn lists who they may shoot.
     pub(crate) fn issue_chat_turns(
         &self,
         game: &Game,
@@ -585,7 +586,7 @@ impl AppState {
                 turn: Turn {
                     turn_id,
                     kind,
-                    candidates: Vec::new(),
+                    candidates: game.shoot_candidates(player),
                     deadline_ms: remaining_ms(ends),
                     view,
                 },
@@ -886,11 +887,13 @@ impl Seat {
             .ok_or_else(|| HttpError::conflict("stale turn; poll again"))?;
         let kind = pending.turn.kind;
         let speaks = is_chat(kind);
-        let action = match (speaks, req.action) {
-            (true, Action::Speak { text }) => Action::Speak {
+        // A chat turn with candidates is the armed sheriff's, who may fire instead of speaking.
+        let targets = !speaks || !pending.turn.candidates.is_empty();
+        let action = match req.action {
+            Action::Speak { text } if speaks => Action::Speak {
                 text: sanitize::text(&text, MAX_TEXT_LEN),
             },
-            (false, Action::Target { target }) => {
+            Action::Target { target } if targets => {
                 if target.is_some_and(|t| !pending.turn.candidates.contains(&t)) {
                     return Err(HttpError::invalid(
                         "target is not one of the turn's candidates",
@@ -898,10 +901,10 @@ impl Seat {
                 }
                 Action::Target { target }
             }
-            (true, Action::Target { .. }) => {
+            Action::Target { .. } => {
                 return Err(HttpError::invalid("this turn needs a `speak` action"));
             }
-            (false, Action::Speak { .. }) => {
+            Action::Speak { .. } => {
                 return Err(HttpError::invalid("this turn needs a `target` action"));
             }
         };

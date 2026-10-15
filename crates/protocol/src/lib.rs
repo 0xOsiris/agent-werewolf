@@ -98,7 +98,7 @@ pub struct Turn {
 #[serde(rename_all = "snake_case")]
 pub enum TurnKind {
     /// Public day discussion, re-issued while the window is open. Answer with `speak`; empty
-    /// text passes.
+    /// text passes. The armed sheriff's turn lists `candidates`; a `target` answer fires instead.
     DaySpeak,
     /// Vote to eliminate. Answer with `target` (null abstains).
     DayVote,
@@ -111,7 +111,7 @@ pub enum TurnKind {
     SeerInspect,
     /// Save one player from tonight's kill. Answer with `target`.
     DoctorProtect,
-    /// Fire the sheriff's one bullet before the vote. Answer with `target`; null holds fire.
+    /// Older servers' separate shot before the vote; the sheriff now fires from `DaySpeak`.
     SheriffShoot,
     /// Cupid's first or second Lover, on night 1. Answer with `target`; null means no Lovers.
     CupidLink,

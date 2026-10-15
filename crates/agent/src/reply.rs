@@ -40,8 +40,8 @@ pub enum ReplyError {
     NoJson(&'static str),
     #[error("\"say\" must be a string")]
     BadSay,
-    #[error("\"target\" must be a player id number or null, got {0}")]
-    BadTarget(String),
+    #[error("\"{0}\" must be a player id number or null, got {1}")]
+    BadTarget(&'static str, String),
     #[error("{0} is not one of the candidate ids")]
     NotCandidate(PlayerId),
 }
@@ -63,7 +63,18 @@ pub fn parse(text: &str, turn: &Turn) -> Result<Decision, ReplyError> {
         .and_then(Value::as_str)
         .and_then(|r| clean_text(r, MAX_REASONING_LEN));
 
-    let action = if is_speak(turn.kind) {
+    let shot = match object.get("shoot") {
+        // Only the armed sheriff's discussion turns list candidates to shoot.
+        Some(value) if is_speak(turn.kind) && !turn.candidates.is_empty() => {
+            parse_target("shoot", value)?
+        }
+        _ => None,
+    };
+    let action = if let Some(id) = shot {
+        Action::Target {
+            target: Some(candidate(id, turn)?),
+        }
+    } else if is_speak(turn.kind) {
         let say = object
             .get("say")
             .and_then(Value::as_str)
@@ -72,15 +83,20 @@ pub fn parse(text: &str, turn: &Turn) -> Result<Decision, ReplyError> {
             text: shorten(say.trim(), MAX_SAY_LEN),
         }
     } else {
-        let target = parse_target(object.get(key).ok_or(ReplyError::NoJson(key))?)?;
-        if let Some(id) = target
-            && !turn.candidates.contains(&id)
-        {
-            return Err(ReplyError::NotCandidate(id));
+        let target = parse_target(key, object.get(key).ok_or(ReplyError::NoJson(key))?)?;
+        Action::Target {
+            target: target.map(|id| candidate(id, turn)).transpose()?,
         }
-        Action::Target { target }
     };
     Ok(Decision { action, reasoning })
+}
+
+fn candidate(id: PlayerId, turn: &Turn) -> Result<PlayerId, ReplyError> {
+    if turn.candidates.contains(&id) {
+        Ok(id)
+    } else {
+        Err(ReplyError::NotCandidate(id))
+    }
 }
 
 /// Finds the first balanced `{...}` in `text` that parses as a JSON object containing `key`.
@@ -128,9 +144,9 @@ fn balanced_len(s: &str) -> Option<usize> {
     None
 }
 
-/// Accepts `3`, `"3"` or `null`; models sometimes quote numbers.
-fn parse_target(value: &Value) -> Result<Option<PlayerId>, ReplyError> {
-    let bad = || ReplyError::BadTarget(truncate(&value.to_string(), 40).into());
+/// Accepts `3`, `"3"` or `null` in `field`; models sometimes quote numbers.
+fn parse_target(field: &'static str, value: &Value) -> Result<Option<PlayerId>, ReplyError> {
+    let bad = || ReplyError::BadTarget(field, truncate(&value.to_string(), 40).into());
     match value {
         Value::Null => Ok(None),
         Value::Number(n) => n
@@ -262,11 +278,11 @@ mod tests {
         );
         assert!(matches!(
             parse(r#"{"target": -1}"#, &vote),
-            Err(ReplyError::BadTarget(_))
+            Err(ReplyError::BadTarget("target", _))
         ));
         assert!(matches!(
             parse(r#"{"target": "Bob"}"#, &vote),
-            Err(ReplyError::BadTarget(_))
+            Err(ReplyError::BadTarget("target", _))
         ));
         assert_eq!(
             parse(r#"{"target": "2"}"#, &vote).unwrap().action,
@@ -275,6 +291,32 @@ mod tests {
         assert_eq!(
             parse(r#"{"target": null}"#, &vote).unwrap().action,
             Action::Target { target: None }
+        );
+    }
+
+    #[test]
+    fn the_armed_sheriff_fires_or_speaks_from_the_discussion() {
+        let armed = turn(TurnKind::DaySpeak, vec![2, 3]);
+        let fire = parse(r#"{"aside": "a", "say": "hi", "shoot": 3}"#, &armed).unwrap();
+        assert_eq!(fire.action, Action::Target { target: Some(3) });
+        assert_eq!(fire.reasoning.as_deref(), Some("a"));
+        for hold in [r#"{"say": "hi", "shoot": null}"#, r#"{"say": "hi"}"#] {
+            assert_eq!(parse(hold, &armed).unwrap().action, speak("hi"));
+        }
+        assert_eq!(
+            parse(r#"{"say": "hi", "shoot": 9}"#, &armed),
+            Err(ReplyError::NotCandidate(9))
+        );
+        assert!(matches!(
+            parse(r#"{"say": "hi", "shoot": "Bob"}"#, &armed),
+            Err(ReplyError::BadTarget("shoot", _))
+        ));
+        let unarmed = turn(TurnKind::DaySpeak, vec![]);
+        let ignored = parse(r#"{"say": "hi", "shoot": 3}"#, &unarmed).unwrap();
+        assert_eq!(
+            ignored.action,
+            speak("hi"),
+            "only the armed sheriff can shoot"
         );
     }
 

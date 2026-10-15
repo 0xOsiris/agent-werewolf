@@ -120,10 +120,8 @@ enum Step {
     /// Open chat among living wolves.
     WolfChat,
     NightActions,
-    /// Open chat among all living players.
+    /// Open chat among all living players; the armed sheriff may fire at any point.
     Discussion,
-    /// The sheriff may fire before the vote.
-    SheriffShoot,
     DayVote,
     Over,
 }
@@ -267,11 +265,7 @@ impl Game {
         match self.step {
             Step::WolfChat => Some(TurnKind::WolfChat),
             Step::Discussion => Some(TurnKind::DaySpeak),
-            Step::CupidLink { .. }
-            | Step::NightActions
-            | Step::SheriffShoot
-            | Step::DayVote
-            | Step::Over => None,
+            Step::CupidLink { .. } | Step::NightActions | Step::DayVote | Step::Over => None,
         }
     }
 
@@ -304,17 +298,30 @@ impl Game {
         self.take_events()
     }
 
-    /// Ends the open chat window and moves on to the sheriff, the vote, or the night actions.
+    /// Fires the armed sheriff's bullet during the discussion; ignored if `target` isn't theirs to shoot.
+    pub fn shoot(&mut self, sheriff: PlayerId, target: PlayerId) -> Vec<GameEvent> {
+        if self.shoot_candidates(sheriff).contains(&target) {
+            self.fire(sheriff, target);
+        }
+        self.take_events()
+    }
+
+    /// Who `player` may shoot now: every other living player if they are the armed sheriff in the
+    /// discussion, else nobody.
+    pub fn shoot_candidates(&self, player: PlayerId) -> Vec<PlayerId> {
+        if self.step == Step::Discussion && self.armed_sheriff() == Some(player) {
+            self.living().filter(|&p| p != player).collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Ends the open chat window and moves on to the vote or the night actions.
     pub fn close_chat(&mut self) -> Vec<GameEvent> {
         match self.step {
             Step::WolfChat => self.step = Step::NightActions,
-            Step::Discussion if self.armed_sheriff().is_some() => self.step = Step::SheriffShoot,
             Step::Discussion => self.step = Step::DayVote,
-            Step::CupidLink { .. }
-            | Step::NightActions
-            | Step::SheriffShoot
-            | Step::DayVote
-            | Step::Over => {}
+            Step::CupidLink { .. } | Step::NightActions | Step::DayVote | Step::Over => {}
         }
         self.take_events()
     }
@@ -348,7 +355,7 @@ impl Game {
                 .collect(),
             Step::Discussion => living
                 .iter()
-                .map(|&p| spec(p, TurnKind::DaySpeak, Vec::new()))
+                .map(|&p| spec(p, TurnKind::DaySpeak, self.shoot_candidates(p)))
                 .collect(),
             Step::NightActions => living
                 .iter()
@@ -370,11 +377,6 @@ impl Game {
                     Role::Villager | Role::Sheriff | Role::Cupid => None,
                 })
                 .collect(),
-            Step::SheriffShoot => self
-                .armed_sheriff()
-                .map(|p| spec(p, TurnKind::SheriffShoot, except(Some(p))))
-                .into_iter()
-                .collect(),
             Step::DayVote => living
                 .iter()
                 .map(|&p| spec(p, TurnKind::DayVote, except(Some(p))))
@@ -384,16 +386,27 @@ impl Game {
     }
 
     /// Applies answers to the current [`Game::turns`] and advances. Missing or invalid answers
-    /// get the default action (silence / abstain). For chat, this posts one message per answer in
-    /// seat order and closes the window; the driver uses [`Game::speak`] instead.
+    /// get the default action (silence / abstain). For chat, this applies one answer per player in
+    /// seat order and closes the window; the driver uses [`Game::speak`] and [`Game::shoot`] instead.
     pub fn submit(&mut self, answers: &[Answer]) -> Vec<GameEvent> {
         let turns = self.turns();
         match self.step {
             Step::WolfChat | Step::Discussion => {
                 let mut events = Vec::new();
                 for turn in &turns {
-                    if let Some(text) = spoken(turn.player, answers) {
-                        events.extend(self.speak(turn.player, &text));
+                    // The sheriff's shot can kill a player whose answer comes later.
+                    if !self.is_alive(turn.player) {
+                        continue;
+                    }
+                    let action = answers.iter().find(|a| a.player == turn.player);
+                    match action.and_then(|a| a.action.as_ref()) {
+                        Some(Action::Speak { text }) => {
+                            events.extend(self.speak(turn.player, text));
+                        }
+                        Some(Action::Target {
+                            target: Some(target),
+                        }) => events.extend(self.shoot(turn.player, *target)),
+                        _ => {}
                     }
                 }
                 events.extend(self.close_chat());
@@ -401,7 +414,6 @@ impl Game {
             }
             Step::CupidLink { first } => self.resolve_link(&turns, answers, first),
             Step::NightActions => self.resolve_night(&turns, answers),
-            Step::SheriffShoot => self.resolve_shot(&turns, answers),
             Step::DayVote => self.resolve_vote(&turns, answers),
             Step::Over => {}
         }
@@ -524,34 +536,26 @@ impl Game {
         }
     }
 
-    /// Fires if the sheriff chose a target; holding fire (or timing out) keeps the bullet.
-    fn resolve_shot(&mut self, turns: &[TurnSpec], answers: &[Answer]) {
-        let fired = turns
-            .iter()
-            .find_map(|turn| Some((turn.player, chosen(turn, answers)?)));
-        if let Some((sheriff, target)) = fired {
-            self.bullet = false;
-            if let Some(seat) = self.players.get_mut(sheriff as usize) {
-                seat.revealed_role = Some(Role::Sheriff);
-            }
-            self.emit_public(PublicEvent::Shot { sheriff, target });
-            let hit_wolf = self.is_wolf(target);
-            self.shot = Some(ShotRecord {
-                sheriff,
-                target,
-                hit_wolf,
-            });
-            let when = self.phase;
-            self.bury(target, DeathCause::Shot, when);
-            // A sheriff who shot their own lover has already died of heartbreak.
-            if !hit_wolf && self.is_alive(sheriff) {
-                self.bury(sheriff, DeathCause::Backfire, when);
-            }
-            self.settle();
+    /// Spends the bullet: reveals the sheriff, kills the target, and the sheriff too on a miss.
+    fn fire(&mut self, sheriff: PlayerId, target: PlayerId) {
+        self.bullet = false;
+        if let Some(seat) = self.players.get_mut(sheriff as usize) {
+            seat.revealed_role = Some(Role::Sheriff);
         }
-        if !self.is_over() {
-            self.step = Step::DayVote;
+        self.emit_public(PublicEvent::Shot { sheriff, target });
+        let hit_wolf = self.is_wolf(target);
+        self.shot = Some(ShotRecord {
+            sheriff,
+            target,
+            hit_wolf,
+        });
+        let when = self.phase;
+        self.bury(target, DeathCause::Shot, when);
+        // A sheriff who shot their own lover has already died of heartbreak.
+        if !hit_wolf && self.is_alive(sheriff) {
+            self.bury(sheriff, DeathCause::Backfire, when);
         }
+        self.settle();
     }
 
     /// The living sheriff, if they still hold their bullet.
@@ -689,7 +693,7 @@ impl Game {
             .filter(|&(a, b)| self.role(a).team() != self.role(b).team())
     }
 
-    fn is_alive(&self, player: PlayerId) -> bool {
+    pub fn is_alive(&self, player: PlayerId) -> bool {
         self.players.get(player as usize).is_some_and(|p| p.alive)
     }
 
@@ -726,14 +730,6 @@ fn chosen(turn: &TurnSpec, answers: &[Answer]) -> Option<PlayerId> {
         Some(Action::Target {
             target: Some(target),
         }) if turn.candidates.contains(&target) => Some(target),
-        _ => None,
-    }
-}
-
-/// The player's speech, or `None` for silence.
-fn spoken(player: PlayerId, answers: &[Answer]) -> Option<String> {
-    match &answers.iter().find(|a| a.player == player)?.action {
-        Some(Action::Speak { text }) if !text.trim().is_empty() => Some(text.clone()),
         _ => None,
     }
 }
@@ -894,18 +890,22 @@ mod tests {
             .0
     }
 
-    /// Plays silently until the sheriff's turn, returning the sheriff's seat.
+    /// Plays silently to the next discussion, returning the armed sheriff's seat.
     fn to_sheriff_turn(game: &mut Game) -> PlayerId {
-        play_until(game, |_, _| None, |g| g.step == Step::SheriffShoot);
+        play_until(game, |_, _| None, |g| g.chat() == Some(TurnKind::DaySpeak));
         let turns = game.turns();
-        assert_eq!(turns.len(), 1);
-        assert_eq!(turns[0].kind, TurnKind::SheriffShoot);
-        assert!(!turns[0].candidates.contains(&turns[0].player));
-        turns[0].player
+        let armed: Vec<&TurnSpec> = turns.iter().filter(|t| !t.candidates.is_empty()).collect();
+        assert_eq!(armed.len(), 1, "only the sheriff may shoot");
+        assert_eq!(armed[0].kind, TurnKind::DaySpeak);
+        assert!(!armed[0].candidates.contains(&armed[0].player));
+        armed[0].player
     }
 
+    /// Answers the discussion: the sheriff fires at `at` (or holds), everyone else stays quiet.
     fn shoot(game: &mut Game, at: Option<PlayerId>) -> Vec<GameEvent> {
-        step(game, |_, _| Some(Action::Target { target: at }))
+        step(game, |_, t| {
+            (!t.candidates.is_empty()).then_some(Action::Target { target: at })
+        })
     }
 
     #[test]
@@ -993,15 +993,49 @@ mod tests {
     #[test]
     fn the_bullet_fires_once() {
         let mut game = sheriff_game(8, 14);
-        to_sheriff_turn(&mut game);
-        let wolf = seat_with(&game, Role::Werewolf);
-        shoot(&mut game, Some(wolf));
+        let sheriff = to_sheriff_turn(&mut game);
+        let wolves = seats_with(&game, Role::Werewolf);
+        shoot(&mut game, Some(wolves[0]));
         play_until(
             &mut game,
             |_, _| None,
-            |g| g.phase == Phase::Day { n: 2 } && g.chat().is_none(),
+            |g| g.day == 2 && g.chat() == Some(TurnKind::DaySpeak),
         );
-        assert_eq!(game.step, Step::DayVote, "no second shot on day 2");
+        assert!(
+            game.turns().iter().all(|t| t.candidates.is_empty()),
+            "no second shot on day 2"
+        );
+        assert!(game.shoot(sheriff, wolves[1]).is_empty());
+    }
+
+    #[test]
+    fn the_sheriff_fires_mid_discussion_and_the_talk_goes_on() {
+        let mut game = sheriff_game(8, 11);
+        let sheriff = to_sheriff_turn(&mut game);
+        let wolf = seat_with(&game, Role::Werewolf);
+        let villager = seat_with(&game, Role::Villager);
+        assert!(
+            game.shoot(villager, wolf).is_empty(),
+            "only the sheriff fires"
+        );
+        assert!(game.shoot(sheriff, sheriff).is_empty(), "not at themselves");
+        assert_eq!(game.speak(villager, "Who is it?").len(), 1);
+
+        let events = game.shoot(sheriff, wolf);
+        assert!(matches!(
+            public(&events)[..],
+            [PublicEvent::Shot { .. }, PublicEvent::Died { player, .. }] if *player == wolf
+        ));
+        assert_eq!(game.chat(), Some(TurnKind::DaySpeak), "the talk goes on");
+        let turns = game.turns();
+        assert!(
+            turns
+                .iter()
+                .all(|t| t.player != wolf && t.candidates.is_empty())
+        );
+        assert_eq!(game.speak(sheriff, "Got one.").len(), 1);
+        game.close_chat();
+        assert_eq!(game.step, Step::DayVote);
     }
 
     #[test]

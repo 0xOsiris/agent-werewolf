@@ -13,7 +13,7 @@ export const ROLE_GOAL = {
   werewolf: "Each night, pick a victim with your pack. By day, blend in. You win when wolves equal or outnumber everyone else.",
   seer: "Each night, inspect one player to learn if they are a werewolf. Help the village vote the wolves out.",
   doctor: "Each night, protect one player from the wolves (not the same player two nights in a row).",
-  sheriff: "You have one bullet. Each day, before the vote, you may fire it. Hit a wolf and only they die; hit anyone else and you die too. Firing reveals you.",
+  sheriff: "You have one bullet. Any time during the day's discussion, you may fire it. Hit a wolf and only they die; hit anyone else and you die too. Firing reveals you.",
   cupid: "On the first night, pick two players to fall in love (you may pick yourself). If one lover dies, the other dies of a broken heart.",
   villager: "Find the werewolves and vote them out before they eat the village.",
 };

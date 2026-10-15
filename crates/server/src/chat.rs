@@ -110,6 +110,11 @@ impl ChatWindow {
         self.ends
     }
 
+    /// Drops members `keep` rejects, such as players the sheriff just shot.
+    pub fn retain(&mut self, keep: impl Fn(PlayerId) -> bool) {
+        self.members.retain(|m| keep(m.player));
+    }
+
     /// Records an answer; true if it is published as a post (non-empty and under the cap).
     pub fn answer(&mut self, player: PlayerId, empty: bool, now: Instant) -> bool {
         let Some(index) = self.members.iter().position(|m| m.player == player) else {
@@ -126,14 +131,24 @@ impl ChatWindow {
         member.jitter = jitter;
         if posted {
             member.messages += 1;
-            self.last_post = now;
-            for (i, other) in self.members.iter_mut().enumerate() {
-                if i != index && other.last_answer.is_some() && other.reply_at.is_none() {
-                    other.reply_at = Some(now);
-                }
-            }
+            self.wake_others(Some(index), now);
         }
         posted
+    }
+
+    /// Treats a public event, such as the sheriff's shot, as a post that anyone may answer.
+    pub fn stir(&mut self, now: Instant) {
+        self.wake_others(None, now);
+    }
+
+    /// Restarts the quiet timer and gives every waiting member but `poster` something to reply to.
+    fn wake_others(&mut self, poster: Option<usize>, now: Instant) {
+        self.last_post = now;
+        for (i, other) in self.members.iter_mut().enumerate() {
+            if Some(i) != poster && other.last_answer.is_some() && other.reply_at.is_none() {
+                other.reply_at = Some(now);
+            }
+        }
     }
 
     /// Players due a new turn at `now`; they count as holding one from here on.
@@ -351,6 +366,45 @@ mod tests {
         // Agent 1 has a jittered turn coming, but nobody has posted since 11s.
         assert!(ready(&chat, 1).is_some());
         assert!(chat.should_close(secs(t0, 61)));
+    }
+
+    #[test]
+    fn a_stir_wakes_everyone_without_using_a_message() {
+        let t0 = Instant::now();
+        let mut chat = started(t0);
+        chat.answer(0, false, secs(t0, 10));
+        chat.answer(1, true, secs(t0, 11));
+        chat.answer(2, true, secs(t0, 12));
+        assert_eq!(ready(&chat, 0), None, "nobody has replied to seat 0");
+        chat.stir(secs(t0, 25));
+        let at = ready(&chat, 0).unwrap();
+        assert!(
+            at >= secs(t0, 25) && at < secs(t0, 25) + JITTER,
+            "{:?}",
+            at - t0
+        );
+        assert!(
+            !chat.should_close(secs(t0, 44)),
+            "the quiet timer restarted"
+        );
+        assert!(chat.should_close(secs(t0, 45)));
+        assert_eq!(chat.members[0].messages, 1);
+    }
+
+    #[test]
+    fn retain_drops_the_dead_so_they_never_hold_the_window_open() {
+        let t0 = Instant::now();
+        let mut chat = started(t0);
+        chat.answer(0, false, secs(t0, 10));
+        chat.answer(2, true, secs(t0, 11));
+        assert!(!chat.should_close(secs(t0, 60)), "seat 1 hasn't answered");
+        chat.retain(|p| p != 1);
+        assert!(chat.should_close(secs(t0, 60)));
+        assert!(
+            !chat.answer(1, false, secs(t0, 61)),
+            "a dropped member can't post"
+        );
+        assert!(chat.due(secs(t0, 100)).iter().all(|&p| p != 1));
     }
 
     #[test]

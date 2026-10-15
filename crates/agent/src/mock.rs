@@ -7,7 +7,7 @@ use crate::{
 use rand::{RngExt, SeedableRng, rngs::StdRng, seq::IndexedRandom};
 use werewolf_protocol::{Action, Turn, TurnKind};
 
-/// Chance a mock sheriff fires on each shoot turn; low, since a miss kills the sheriff too.
+/// Chance a mock sheriff fires on each shoot or discussion turn; low, since a miss kills the sheriff too.
 const SHERIFF_FIRE_CHANCE: f64 = 0.25;
 
 /// Mocks speak this often per chat window and then pass, so mock games finish fast.
@@ -77,7 +77,12 @@ impl MockBrain {
         if ghost && !self.rng.random_bool(GHOST_CHANCE) {
             return Decision::fallback(turn.kind);
         }
-        if is_speak(turn.kind) && chat::own_messages(view, turn.kind) >= CHAT_MESSAGES_PER_WINDOW {
+        // The armed sheriff's discussion turns list who they may shoot.
+        let fire = turn.kind == TurnKind::DaySpeak
+            && !turn.candidates.is_empty()
+            && self.rng.random_bool(SHERIFF_FIRE_CHANCE);
+        let speaks = is_speak(turn.kind) && !fire;
+        if speaks && chat::own_messages(view, turn.kind) >= CHAT_MESSAGES_PER_WINDOW {
             return Decision {
                 action: Action::Speak {
                     text: String::new(),
@@ -85,7 +90,7 @@ impl MockBrain {
                 reasoning: Some("I've said my piece. I'll listen for now.".into()),
             };
         }
-        if is_speak(turn.kind) {
+        if speaks {
             let others: Vec<&str> = view
                 .players
                 .iter()
@@ -108,6 +113,7 @@ impl MockBrain {
             };
         }
         let hold = match turn.kind {
+            _ if fire => 0.0,
             TurnKind::SheriffShoot => 1.0 - SHERIFF_FIRE_CHANCE,
             // Always link, so mock games exercise the Lovers.
             TurnKind::CupidLink => 0.0,
@@ -291,6 +297,25 @@ mod tests {
             if let Some(t) = target {
                 assert!(shoot.candidates.contains(&t));
                 fired += 1;
+            }
+        }
+        assert!((180..=320).contains(&fired), "fired {fired} of 1000");
+    }
+
+    #[test]
+    fn mock_sheriff_sometimes_fires_from_the_discussion() {
+        let mut brain = MockBrain::new(Some(12));
+        let mut armed = turn(TurnKind::DaySpeak);
+        armed.candidates = vec![2, 3];
+        let mut fired = 0;
+        for _ in 0..1000 {
+            match brain.decide(&armed).action {
+                Action::Target { target: Some(t) } => {
+                    assert!(armed.candidates.contains(&t));
+                    fired += 1;
+                }
+                Action::Speak { .. } => {}
+                other => panic!("unexpected {other:?}"),
             }
         }
         assert!((180..=320).contains(&fired), "fired {fired} of 1000");

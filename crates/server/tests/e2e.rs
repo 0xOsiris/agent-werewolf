@@ -274,7 +274,17 @@ async fn bot(server: &Server, token: String, seed: u64, style: Style) -> Played 
                     chat_phase = Some(turn.view.phase);
                     said = 0;
                 }
+                let spared: Vec<u32> = turn
+                    .candidates
+                    .iter()
+                    .copied()
+                    .filter(|&c| c != SILENT)
+                    .collect();
                 let action = match turn.kind {
+                    // The armed sheriff fires on their first chance.
+                    TurnKind::DaySpeak if !spared.is_empty() => Action::Target {
+                        target: spared.choose(&mut rng).copied(),
+                    },
                     TurnKind::DaySpeak | TurnKind::WolfChat | TurnKind::DeadChat if said >= 2 => {
                         Action::Speak {
                             text: String::new(),
@@ -298,17 +308,9 @@ async fn bot(server: &Server, token: String, seed: u64, style: Style) -> Played 
                             text: format!("{DEAD_CHAT}: boo"),
                         }
                     }
-                    _ => {
-                        let spared: Vec<u32> = turn
-                            .candidates
-                            .iter()
-                            .copied()
-                            .filter(|&c| c != SILENT)
-                            .collect();
-                        Action::Target {
-                            target: spared.choose(&mut rng).copied(),
-                        }
-                    }
+                    _ => Action::Target {
+                        target: spared.choose(&mut rng).copied(),
+                    },
                 };
                 let res = server.act(&token, turn.turn_id, action).await;
                 assert_eq!(res.status(), StatusCode::OK, "{}", error_of(res).await);
@@ -839,14 +841,18 @@ async fn watch_streams_only_show_what_each_player_may_know() {
         if roles[me] == "sheriff" {
             let died_night_one =
                 summary["players"][me]["died_on"] == serde_json::json!({ "kind": "night", "n": 1 });
-            let shoot_turn = events
-                .iter()
-                .any(|e| e["type"] == "turn_started" && e["kind"] == "sheriff_shoot");
+            let fired = events.iter().any(|e| {
+                e["type"] == "public" && e["event"]["type"] == "shot" && e["event"]["sheriff"] == me
+            });
             assert!(
-                shoot_turn || died_night_one,
-                "the sheriff gets a turn on day 1"
+                fired || died_night_one,
+                "the sheriff fires during day 1's discussion"
             );
         }
+        assert!(
+            events.iter().all(|e| e["kind"] != "sheriff_shoot"),
+            "the shot has no turn of its own"
+        );
         let private = |kind: &str| -> Vec<&Value> {
             events
                 .iter()
@@ -980,6 +986,8 @@ async fn chat_messages_skip_the_pace() {
         "--turn-timeout-secs=10",
         "--discussion-secs=3",
         "--no-cupid",
+        // A sheriff bot fires at once, which could end the game before anyone speaks.
+        "--no-sheriff",
     ];
     let server = Server::start(dir.path(), &args).await;
     let mut tokens = Vec::new();

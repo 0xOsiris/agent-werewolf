@@ -349,7 +349,8 @@ async function pollLoop(gen) {
     }
     failures = 0;
     if (body.status === "turn" && CHAT_KINDS.has(body.kind)) {
-      hideTurn();
+      // Keep the sheriff's open shoot panel while its chat turn is still the current one.
+      if (!turn || !turn.viaChat || turn.turn_id !== body.turn_id) hideTurn();
       showChatTurn(body);
       await new Promise((r) => {
         chatTurn.settle = r;
@@ -451,8 +452,17 @@ function dropChatTurn() {
   const current = chatTurn;
   chatTurn = null;
   if (current) current.settle();
+  if (turn && turn.viaChat) hideTurn();
   renderChat();
 }
+
+/** The armed sheriff's chat turns list who they may shoot; firing answers the chat turn. */
+function showShot() {
+  if (!chatTurn || !chatTurn.candidates || !chatTurn.candidates.length) return;
+  const deadline_ms = Math.max(0, chatTurn.deadline - performance.now());
+  showTurn({ ...chatTurn, kind: "sheriff_shoot", deadline_ms, viaChat: true });
+}
+$("chat-shoot").addEventListener("click", () => showShot());
 
 function renderChat() {
   const s = game.state;
@@ -491,6 +501,9 @@ function renderChat() {
     status = wait > 0 ? "You can talk again in " + Math.ceil(wait / 1000) + "s" : "Waiting for your turn…";
   }
   $("chat-status").textContent = status;
+  const armed = !ghost && !!chatTurn && chatTurn.kind === "day_speak" && !!(chatTurn.candidates || []).length;
+  $("chat-shoot").hidden = !armed;
+  $("chat-shoot").disabled = chatBusy || busy;
   const n = [...$("chat-text").value].length;
   $("chat-counter").textContent = n + " / " + MAX_TEXT;
   $("chat-send").disabled = !chatTurn || chatBusy || left === 0 || n === 0 || n > MAX_TEXT;
@@ -590,7 +603,8 @@ async function act(action) {
     });
     if (res.ok) {
       hideTurn();
-      notice("Choice locked in.");
+      if (current.viaChat && chatTurn && chatTurn.turn_id === current.turn_id) dropChatTurn();
+      notice(current.viaChat ? "Shot fired." : "Choice locked in.");
       return;
     }
     const body = await res.json().catch(() => ({}));
@@ -602,6 +616,10 @@ async function act(action) {
       $("act-error").textContent = "That turn is over: " + msg;
       notice("That turn already ended.");
       current.settle();
+      if (current.viaChat) {
+        hideTurn();
+        if (chatTurn && chatTurn.turn_id === current.turn_id) dropChatTurn();
+      }
     } else {
       $("act-error").textContent = (res.status === 422 ? "Not allowed: " : "Error: ") + msg;
     }
@@ -620,7 +638,11 @@ function setButtons() {
 $("act-confirm").addEventListener("click", () => {
   if (selected !== null) act({ type: "target", target: selected });
 });
-$("act-abstain").addEventListener("click", () => act({ type: "target", target: null }));
+// From the discussion, holding fire just closes the panel and keeps the chat turn.
+$("act-abstain").addEventListener("click", () => {
+  if (turn && turn.viaChat) hideTurn();
+  else act({ type: "target", target: null });
+});
 
 // ------------------------------------------------------------ game over
 

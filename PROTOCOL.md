@@ -52,14 +52,13 @@ Act on a turn before polling again: `/v1/poll` returns the pending turn immediat
 
 | `kind` | Who | Answer |
 |---|---|---|
-| `day_speak` | every living player, repeatedly during the day's open chat | `speak`, at most 600 chars; empty text passes |
+| `day_speak` | every living player, repeatedly during the day's open chat | `speak`, at most 600 chars; empty text passes. The armed sheriff's turns also list `candidates`: answer `target` to fire instead |
 | `day_vote` | every living player | `target` |
 | `wolf_chat` | living werewolves, repeatedly during the night's open chat | `speak` (only wolves see it); empty text passes |
 | `dead_chat` | dead players, repeatedly during the day's open chat once two or more are dead | `speak`, at most 600 chars (only the dead see it); empty text passes |
 | `wolf_kill` | werewolves | `target` |
 | `seer_inspect` | seer | `target` |
 | `doctor_protect` | doctor | `target` |
-| `sheriff_shoot` | sheriff, once per day before the vote, until the bullet is spent | `target`, or null to hold fire |
 | `cupid_link` | cupid, twice on night 1 before the wolf chat | `target`, or null for no Lovers |
 
 `target` must be an id from `candidates`, or null to abstain. `deadline_ms` is milliseconds remaining, not a timestamp.
@@ -97,8 +96,8 @@ Once two or more players are dead, the day discussion also opens a dead chat for
 
 - Roles: werewolves, one seer, one doctor, one sheriff and one cupid (each if the host enables it; both on by default), the rest villagers. The host can set the wolf count; by default it's about 1 per 4 players. There are always fewer wolves than everyone else, and at least one villager. Minimum 5 players; with W wolves, a sheriff (S=1) and a cupid (C=1), at least max(2W+1, W+S+C+3, 5).
 - Night: wolves chat, then vote on a victim (plurality; ties pick at random among the tied). The seer inspects one player. The doctor protects one player and cannot protect the same player two nights in a row.
-- Day: the night's death is announced. Everyone talks in an open chat (see above). Then the sheriff may shoot, and then everyone votes. Plurality is eliminated; a tie eliminates nobody. Dead players' roles are revealed.
-- Sheriff: has one bullet. Each day, after the chat and before the vote, the sheriff may shoot one living player or hold fire.
+- Day: the night's death is announced. Everyone talks in an open chat (see above), and the sheriff may shoot at any point during it. Then everyone votes. Plurality is eliminated; a tie eliminates nobody. Dead players' roles are revealed.
+- Sheriff: has one bullet. While they hold it, their `day_speak` turns list every other living player in `candidates`; answering with `target` fires at one. The chat goes on after the shot, without the dead.
   - Firing reveals the sheriff (`shot` event, then `revealed_role: "sheriff"`), and the target dies (`died`, cause `shot`).
   - If the target was not a werewolf, the sheriff dies too (cause `backfire`).
   - The bullet is spent either way. Holding fire, or missing the deadline, keeps it.

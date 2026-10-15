@@ -56,7 +56,7 @@ pub(crate) async fn run(app: Arc<AppState>, mut game: Game, seed: u64) {
 
 /// Runs one chat window, plus the dead chat, until it times out or goes quiet. False on shutdown.
 async fn run_chat(app: &AppState, game: &mut Game, kind: TurnKind, seed: u64) -> bool {
-    let players: Vec<PlayerId> = game.turns().iter().map(|t| t.player).collect();
+    let mut players: Vec<PlayerId> = game.turns().iter().map(|t| t.player).collect();
     let ghosts = if app.config().no_dead_chat {
         Vec::new()
     } else {
@@ -88,7 +88,12 @@ async fn run_chat(app: &AppState, game: &mut Game, kind: TurnKind, seed: u64) ->
         for collected in app.take_answers(TurnKind::DeadChat, &ghosts) {
             post(app, game, &mut dead_chat, collected, now);
         }
-        if window.should_close(now) {
+        // Players the sheriff shot lose their turns; their answers are dropped.
+        let shot: Vec<PlayerId> = players.extract_if(.., |p| !game.is_alive(*p)).collect();
+        if !shot.is_empty() {
+            app.cancel_chat(kind, &shot);
+        }
+        if game.is_over() || window.should_close(now) {
             break;
         }
         let due = window.due(now);
@@ -131,7 +136,7 @@ async fn run_chat(app: &AppState, game: &mut Game, kind: TurnKind, seed: u64) ->
     true
 }
 
-/// Publishes a chat answer right away, unpaced, followed by its reasoning.
+/// Publishes a chat answer, or the sheriff's shot, right away and unpaced, followed by its reasoning.
 fn post(
     app: &AppState,
     game: &mut Game,
@@ -140,21 +145,34 @@ fn post(
     now: Instant,
 ) {
     let player = collected.answer.player;
-    let text = match &collected.answer.action {
-        Some(Action::Speak { text }) => text.as_str(),
-        _ => "",
-    };
-    if window.answer(player, text.trim().is_empty(), now) {
-        for event in game.speak(player, text) {
-            app.publish(event.into());
+    let mut kind = collected.kind;
+    match &collected.answer.action {
+        Some(Action::Speak { text }) => {
+            if window.answer(player, text.trim().is_empty(), now) {
+                for event in game.speak(player, text) {
+                    app.publish(event.into());
+                }
+            }
+        }
+        // Firing or holding fire uses up the turn without posting.
+        Some(Action::Target { target }) => {
+            window.answer(player, true, now);
+            if let Some(target) = *target {
+                kind = TurnKind::SheriffShoot;
+                for event in game.shoot(player, target) {
+                    app.publish(event.into());
+                }
+                // Later answers in this batch from the newly dead must not post.
+                window.retain(|p| game.is_alive(p));
+                window.stir(now);
+            }
+        }
+        None => {
+            window.answer(player, true, now);
         }
     }
     if let Some(text) = collected.reasoning {
-        app.publish(SpectatorEvent::Reasoning {
-            player,
-            kind: collected.kind,
-            text,
-        });
+        app.publish(SpectatorEvent::Reasoning { player, kind, text });
     }
 }
 

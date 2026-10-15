@@ -607,6 +607,7 @@ textarea { resize: vertical; min-height: 96px; }
 .chat-row { display: flex; align-items: center; gap: 10px; }
 .chat-status { flex: 1; color: var(--accent); font-weight: 800; font-size: 14px; }
 .chat-row button { flex: none; padding: 10px 26px; }
+.chat-row .shoot-btn { background: var(--wolf); color: #ffffff; padding: 10px 16px; }
 .sent { color: var(--doctor); font-weight: 800; }
 .spacer-for-action { height: 0; }
 body.has-action .spacer-for-action { height: 50vh; }
