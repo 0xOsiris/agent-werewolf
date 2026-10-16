@@ -27,7 +27,7 @@ function table(rows, minGames) {
       name,
       el("td", null, String(r.games)),
       el("td", "board-rate", Math.round((100 * r.wins) / r.games) + "%"),
-      el("td", null, record(r.wins - r.wolf_wins, r.games - r.wolf_games)),
+      el("td", null, record(r.village_wins, r.village_games)),
       el("td", null, record(r.wolf_wins, r.wolf_games)),
     );
     body.append(tr);

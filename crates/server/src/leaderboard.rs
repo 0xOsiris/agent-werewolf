@@ -27,11 +27,13 @@ enum Who {
 struct Record {
     games: u32,
     wins: u32,
+    village_games: u32,
+    village_wins: u32,
     wolf_games: u32,
     wolf_wins: u32,
 }
 
-/// One leaderboard line; the village record is the total minus the wolf record.
+/// One leaderboard line; Jester games count only in the totals.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct Row {
     /// The model id, or "Humans".
@@ -39,6 +41,8 @@ pub struct Row {
     pub human: bool,
     pub games: u32,
     pub wins: u32,
+    pub village_games: u32,
+    pub village_wins: u32,
     pub wolf_games: u32,
     pub wolf_wins: u32,
 }
@@ -136,6 +140,8 @@ impl Leaderboard {
                 human: *who == Who::Humans,
                 games: r.games,
                 wins: r.wins,
+                village_games: r.village_games,
+                village_wins: r.village_wins,
                 wolf_games: r.wolf_games,
                 wolf_wins: r.wolf_wins,
             })
@@ -151,8 +157,11 @@ impl Leaderboard {
         };
         let record = self.records.entry(who).or_default();
         let wolf = role == Role::Werewolf;
+        let village = !wolf && role != Role::Jester;
         record.games += 1;
         record.wins += u32::from(won);
+        record.village_games += u32::from(village);
+        record.village_wins += u32::from(village && won);
         record.wolf_games += u32::from(wolf);
         record.wolf_wins += u32::from(wolf && won);
     }
@@ -246,6 +255,8 @@ mod tests {
                 human: true,
                 games: 2,
                 wins: 1,
+                village_games: 1,
+                village_wins: 1,
                 wolf_games: 1,
                 wolf_wins: 0,
             }
@@ -299,11 +310,31 @@ mod tests {
                 human: false,
                 games: 2,
                 wins: 2,
+                village_games: 0,
+                village_wins: 0,
                 wolf_games: 2,
                 wolf_wins: 2,
             }
         );
         assert_eq!(row(&board, "Humans").games, 2);
+    }
+
+    #[test]
+    fn jester_games_count_only_in_the_totals() {
+        let mut board = Leaderboard::default();
+        board.add(false, Some("m/x"), Role::Jester, true);
+        board.add(false, Some("m/x"), Role::Villager, false);
+        let r = row(&board, "m/x");
+        assert_eq!(
+            (
+                r.games,
+                r.wins,
+                r.village_games,
+                r.village_wins,
+                r.wolf_games
+            ),
+            (2, 1, 1, 0, 0)
+        );
     }
 
     #[test]

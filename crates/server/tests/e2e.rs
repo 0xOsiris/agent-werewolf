@@ -391,6 +391,8 @@ async fn six_bots_play_to_completion() {
             "human": false,
             "games": 6,
             "wins": wins,
+            "village_games": players.iter().filter(|p| p["role"] != "werewolf" && p["role"] != "jester").count(),
+            "village_wins": players.iter().filter(|p| p["role"] != "werewolf" && p["role"] != "jester" && p["won"] == true).count(),
             "wolf_games": players.iter().filter(|p| p["role"] == "werewolf").count(),
             "wolf_wins": players.iter().filter(|p| p["role"] == "werewolf" && p["won"] == true).count(),
         }],
