@@ -14,4 +14,5 @@ PLAYERS=(
   "Marlowe|moonshotai/kimi-k3|Speak like a weary hard-boiled private eye with a simile for everything."
   "Morse|z-ai/glm-5.3|Speak like a grumpy, brilliant inspector who hates sloppy thinking."
   "Wimsey|nousresearch/hermes-4-405b|Speak like a cheerful, witty aristocrat who treats the case as a parlour game."
+  "Wyatt|deepseek/deepseek-v4.1-flash|Speak like a laconic frontier cowboy: slow drawl, plain words, and the odd 'reckon' or 'partner'."
 )
