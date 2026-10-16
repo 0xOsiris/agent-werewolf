@@ -26,6 +26,9 @@ pub struct SettingsBody {
     pub wolves: Option<u32>,
     pub sheriff: bool,
     pub cupid: bool,
+    /// Optional so older clients that don't know the jester can still save settings.
+    #[serde(default)]
+    pub jester: bool,
     pub discussion_secs: u32,
     pub ai_chat_cooldown_secs: u32,
     pub ai_max_chat_messages: u32,
@@ -45,6 +48,7 @@ impl Settings {
                 wolves: config.wolves,
                 sheriff: config.sheriff(),
                 cupid: config.cupid(),
+                jester: config.jester(),
             },
             discussion: config.discussion_secs,
             ai_chat_cooldown: config.ai_chat_cooldown_secs,
@@ -62,6 +66,7 @@ impl Settings {
                 .map(|w| u32::try_from(w.get()).unwrap_or(u32::MAX)),
             sheriff: self.setup.sheriff,
             cupid: self.setup.cupid,
+            jester: self.setup.jester,
             discussion_secs: secs(self.discussion),
             ai_chat_cooldown_secs: secs(self.ai_chat_cooldown),
             ai_max_chat_messages: self.ai_max_chat_messages,
@@ -107,9 +112,9 @@ impl SettingsBody {
         )?;
         let wolves = self.wolves.and_then(|w| NonZeroUsize::new(w as usize));
         if let Some(wolves) = wolves {
-            let need = players_needed(wolves.get(), self.sheriff, self.cupid);
+            let need = players_needed(wolves.get(), self.sheriff, self.cupid, self.jester);
             if need > max_players {
-                let setup = describe_setup(wolves.get(), self.sheriff, self.cupid);
+                let setup = describe_setup(wolves.get(), self.sheriff, self.cupid, self.jester);
                 return Err(format!(
                     "{setup} need {need} players, but --max-players is {max_players}"
                 ));
@@ -120,6 +125,7 @@ impl SettingsBody {
                 wolves,
                 sheriff: self.sheriff,
                 cupid: self.cupid,
+                jester: self.jester,
             },
             discussion: Duration::from_secs(discussion.into()),
             ai_chat_cooldown: Duration::from_secs(cooldown.into()),
@@ -137,11 +143,25 @@ mod tests {
         wolves: Some(2),
         sheriff: true,
         cupid: true,
+        jester: false,
         discussion_secs: 90,
         ai_chat_cooldown_secs: 20,
         ai_max_chat_messages: 4,
         human_turn_timeout_secs: 120,
     };
+
+    #[test]
+    fn jester_is_optional_in_the_body_and_off_by_default() {
+        let mut json = serde_json::to_value(VALID).unwrap();
+        json.as_object_mut().unwrap().remove("jester");
+        let body: SettingsBody = serde_json::from_value(json).unwrap();
+        assert!(!body.jester);
+        let on = SettingsBody {
+            jester: true,
+            ..VALID
+        };
+        assert!(on.validate(12).unwrap().setup.jester);
+    }
 
     #[test]
     fn round_trips_valid_settings() {
@@ -225,6 +245,20 @@ mod tests {
             .validate(max_players)
             .err()
         };
+        let with_jester = |wolves, max_players| {
+            SettingsBody {
+                wolves: Some(wolves),
+                jester: true,
+                ..VALID
+            }
+            .validate(max_players)
+            .err()
+        };
+        assert_eq!(
+            with_jester(1, 6).as_deref(),
+            Some("1 wolves + sheriff + cupid + jester need 7 players, but --max-players is 6")
+        );
+        assert_eq!(with_jester(1, 7), None);
         assert_eq!(
             err(3, true, false, 6).as_deref(),
             Some("3 wolves + sheriff need 7 players, but --max-players is 6")

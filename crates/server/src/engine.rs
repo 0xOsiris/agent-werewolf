@@ -37,21 +37,25 @@ pub struct Setup {
     pub sheriff: bool,
     /// Deal one villager the cupid role.
     pub cupid: bool,
+    /// Deal one villager the jester role.
+    pub jester: bool,
 }
 
-/// Seats needed: fewer wolves than others, plus a seer, doctor, sheriff and cupid if on, and a
-/// villager.
-pub fn players_needed(wolves: usize, sheriff: bool, cupid: bool) -> usize {
+/// Seats needed: fewer wolves than others, plus a seer, doctor, sheriff, cupid and jester if on,
+/// and a villager.
+pub fn players_needed(wolves: usize, sheriff: bool, cupid: bool, jester: bool) -> usize {
+    let specials = usize::from(sheriff) + usize::from(cupid) + usize::from(jester);
     (2 * wolves + 1)
-        .max(wolves + 2 + usize::from(sheriff) + usize::from(cupid) + 1)
+        .max(wolves + 2 + specials + 1)
         .max(MIN_PLAYERS)
 }
 
 /// Names a setup in errors, like "2 wolves + sheriff + cupid".
-pub fn describe_setup(wolves: usize, sheriff: bool, cupid: bool) -> String {
+pub fn describe_setup(wolves: usize, sheriff: bool, cupid: bool, jester: bool) -> String {
     let sheriff = if sheriff { " + sheriff" } else { "" };
     let cupid = if cupid { " + cupid" } else { "" };
-    format!("{wolves} wolves{sheriff}{cupid}")
+    let jester = if jester { " + jester" } else { "" };
+    format!("{wolves} wolves{sheriff}{cupid}{jester}")
 }
 
 /// The sheriff's one shot.
@@ -142,6 +146,8 @@ pub struct Game {
     bullet: bool,
     shot: Option<ShotRecord>,
     lovers: Option<(PlayerId, PlayerId)>,
+    /// The village voted the Jester out, which is the Jester's win.
+    jester_won: bool,
     winner: Option<Team>,
     public_log: Vec<PublicEvent>,
     private_log: Vec<(Audience, PrivateEvent)>,
@@ -161,10 +167,10 @@ impl Game {
             None if n < MIN_PLAYERS => return Err(EngineError::TooFewPlayers(n)),
             None => (n / 4).max(1),
         };
-        let need = players_needed(wolves, setup.sheriff, setup.cupid);
+        let need = players_needed(wolves, setup.sheriff, setup.cupid, setup.jester);
         if n < need {
             return Err(EngineError::TooFewForSetup {
-                setup: describe_setup(wolves, setup.sheriff, setup.cupid),
+                setup: describe_setup(wolves, setup.sheriff, setup.cupid, setup.jester),
                 need,
             });
         }
@@ -176,6 +182,9 @@ impl Game {
         }
         if setup.cupid {
             roles.push(Role::Cupid);
+        }
+        if setup.jester {
+            roles.push(Role::Jester);
         }
         roles.resize(n, Role::Villager);
         roles.shuffle(&mut rng);
@@ -203,6 +212,7 @@ impl Game {
             bullet: setup.sheriff,
             shot: None,
             lovers: None,
+            jester_won: false,
             winner: None,
             public_log: Vec::new(),
             private_log: Vec::new(),
@@ -248,6 +258,11 @@ impl Game {
 
     /// Whether `player` shares the win; cross-team lovers win only as [`Team::Lovers`].
     pub fn won(&self, player: PlayerId) -> bool {
+        if self.role(player) == Role::Jester {
+            // Being voted out is the Jester's own win; otherwise only a Lovers win can include them.
+            let lovers = self.winner == Some(Team::Lovers) && self.lover_of(player).is_some();
+            return self.jester_won || lovers;
+        }
         match self.winner {
             Some(Team::Lovers) => self.lover_of(player).is_some(),
             Some(team) => {
@@ -374,7 +389,7 @@ impl Game {
                         TurnKind::DoctorProtect,
                         except(self.last_protected),
                     )),
-                    Role::Villager | Role::Sheriff | Role::Cupid => None,
+                    Role::Villager | Role::Sheriff | Role::Cupid | Role::Jester => None,
                 })
                 .collect(),
             Step::DayVote => living
@@ -575,7 +590,11 @@ impl Game {
             });
         }
         match leaders(&votes).as_slice() {
-            [condemned] => self.kill(*condemned, DeathCause::Vote, self.phase),
+            [condemned] => {
+                // Only the vote itself counts; a Jester dying of heartbreak alongside wins nothing.
+                self.jester_won |= self.role(*condemned) == Role::Jester;
+                self.kill(*condemned, DeathCause::Vote, self.phase);
+            }
             _ => self.emit_public(PublicEvent::NoElimination),
         }
         if self.is_over() {
@@ -882,6 +901,7 @@ mod tests {
             wolves: wolves.and_then(NonZeroUsize::new),
             sheriff,
             cupid,
+            jester: false,
         }
     }
 
@@ -1433,7 +1453,7 @@ mod tests {
                         matches!(&view.private_log[..], [PrivateEvent::Protected { target }] if *target == doctor)
                     );
                 }
-                Role::Villager | Role::Sheriff | Role::Cupid => {
+                Role::Villager | Role::Sheriff | Role::Cupid | Role::Jester => {
                     assert!(view.private_log.is_empty())
                 }
                 Role::Werewolf => {}
@@ -1506,28 +1526,40 @@ mod tests {
 
     #[test]
     fn players_needed_covers_every_setup() {
-        for (wolves, sheriff, cupid, need) in [
-            (1, false, false, 5),
-            (1, true, false, 5),
-            (1, false, true, 5),
-            (1, true, true, 6),
-            (2, false, false, 5),
-            (2, true, false, 6),
-            (2, false, true, 6),
-            (2, true, true, 7),
-            (3, false, false, 7),
-            (3, true, false, 7),
-            (3, false, true, 7),
-            (3, true, true, 8),
+        for (wolves, sheriff, cupid, jester, need) in [
+            (1, false, false, false, 5),
+            (1, true, false, false, 5),
+            (1, false, true, false, 5),
+            (1, true, true, false, 6),
+            (2, false, false, false, 5),
+            (2, true, false, false, 6),
+            (2, false, true, false, 6),
+            (2, true, true, false, 7),
+            (3, false, false, false, 7),
+            (3, true, false, false, 7),
+            (3, false, true, false, 7),
+            (3, true, true, false, 8),
+            (1, false, false, true, 5),
+            (1, true, true, true, 7),
+            (2, true, true, true, 8),
+            (3, true, true, true, 9),
         ] {
-            let case = format!("{wolves} wolves, sheriff={sheriff}, cupid={cupid}");
-            assert_eq!(players_needed(wolves, sheriff, cupid), need, "{case}");
-            let setup = setup(Some(wolves), sheriff, cupid);
+            let case =
+                format!("{wolves} wolves, sheriff={sheriff}, cupid={cupid}, jester={jester}");
+            assert_eq!(
+                players_needed(wolves, sheriff, cupid, jester),
+                need,
+                "{case}"
+            );
+            let setup = Setup {
+                jester,
+                ..setup(Some(wolves), sheriff, cupid)
+            };
             assert!(Game::new(roster(need), setup, 0).is_ok(), "{case}");
             assert_eq!(
                 Game::new(roster(need - 1), setup, 0).err(),
                 Some(EngineError::TooFewForSetup {
-                    setup: describe_setup(wolves, sheriff, cupid),
+                    setup: describe_setup(wolves, sheriff, cupid, jester),
                     need
                 }),
                 "{case}"
@@ -1819,5 +1851,144 @@ mod tests {
         });
         assert_eq!(game.winner(), Some(Team::Village));
         assert!(game.won(villagers[0]) && game.won(villagers[1]));
+    }
+
+    fn jester_game(n: usize, sheriff: bool, cupid: bool, seed: u64) -> Game {
+        let setup = Setup {
+            jester: true,
+            ..setup(None, sheriff, cupid)
+        };
+        Game::new(roster(n), setup, seed).unwrap().0
+    }
+
+    /// Wolves kill the first candidate each night; nobody else acts.
+    fn wolves_feed(_: &Game, t: &TurnSpec) -> Option<Action> {
+        match t.kind {
+            TurnKind::WolfKill => target(t.candidates[0]),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn role_counts_with_jester() {
+        for (n, wolves) in [(5, 1), (8, 2), (12, 3)] {
+            let game = jester_game(n, false, false, 7);
+            let count = |role| game.roles().iter().filter(|&&r| r == role).count();
+            assert_eq!(count(Role::Werewolf), wolves, "n={n}");
+            assert_eq!(count(Role::Jester), 1, "n={n}");
+            assert_eq!(count(Role::Villager), n - wolves - 3, "n={n}");
+            assert!(
+                !game.is_wolf(seat_with(&game, Role::Jester)),
+                "the seer sees a non-wolf"
+            );
+        }
+        assert!(
+            !game(8, 7).roles().contains(&Role::Jester),
+            "off by default"
+        );
+    }
+
+    #[test]
+    fn a_voted_out_jester_wins_alone_and_the_game_goes_on() {
+        let mut game = jester_game(8, false, false, 41);
+        let jester = seat_with(&game, Role::Jester);
+        let wolves = seats_with(&game, Role::Werewolf);
+        play_until(&mut game, |_, _| None, |g| g.step == Step::DayVote);
+        let events = step(&mut game, |_, t| {
+            (t.player != jester).then(|| target(jester)).flatten()
+        });
+        assert_eq!(deaths(&events), [(jester, DeathCause::Vote)]);
+        assert!(!game.is_over(), "the game goes on without the Jester");
+        assert!(game.won(jester));
+
+        play(&mut game, wolves_feed);
+        assert_eq!(game.winner(), Some(Team::Wolves));
+        for p in 0..8 {
+            assert_eq!(game.won(p), p == jester || wolves.contains(&p), "seat {p}");
+        }
+    }
+
+    #[test]
+    fn a_jester_who_dies_any_other_way_wins_nothing() {
+        // Eaten on night 1.
+        let mut game = jester_game(8, false, false, 42);
+        let jester = seat_with(&game, Role::Jester);
+        play(&mut game, |g, t| match t.kind {
+            TurnKind::WolfKill if g.is_alive(jester) => target(jester),
+            _ => wolves_feed(g, t),
+        });
+        assert_eq!(game.died_on(jester), Some(Phase::Night { n: 1 }));
+        assert!(!game.won(jester));
+
+        // Shot by the sheriff, who backfires because the Jester is no wolf.
+        let mut game = jester_game(8, true, false, 43);
+        let jester = seat_with(&game, Role::Jester);
+        let sheriff = to_sheriff_turn(&mut game);
+        let events = shoot(&mut game, Some(jester));
+        assert_eq!(
+            deaths(&events),
+            [(jester, DeathCause::Shot), (sheriff, DeathCause::Backfire)]
+        );
+        assert!(!game.won(jester));
+
+        // Heartbroken after their Lover is voted out.
+        let mut game = jester_game(8, false, true, 44);
+        let jester = seat_with(&game, Role::Jester);
+        let villager = seat_with(&game, Role::Villager);
+        link(&mut game, villager, jester);
+        play_until(&mut game, |_, _| None, |g| g.step == Step::DayVote);
+        let events = step(&mut game, |_, _| target(villager));
+        assert_eq!(
+            deaths(&events),
+            [
+                (villager, DeathCause::Vote),
+                (jester, DeathCause::Heartbreak)
+            ]
+        );
+        assert!(!game.won(jester));
+    }
+
+    #[test]
+    fn the_jester_counts_toward_parity_but_never_shares_a_team_win() {
+        // As in `wolves_win_at_parity`: five seats take three nights, so the Jester counted as a non-wolf.
+        let mut game = jester_game(5, false, false, 2);
+        let jester = seat_with(&game, Role::Jester);
+        play(&mut game, |g, t| match t.kind {
+            TurnKind::WolfKill => g
+                .living()
+                .find(|&p| p != jester && !g.is_wolf(p))
+                .and_then(target),
+            _ => None,
+        });
+        assert_eq!(game.winner(), Some(Team::Wolves));
+        assert_eq!(game.days_played(), 3);
+        assert!(
+            game.is_alive(jester) && !game.won(jester),
+            "surviving is not the Jester's win"
+        );
+
+        // The village wins without the Jester.
+        let mut game = jester_game(8, false, false, 45);
+        let jester = seat_with(&game, Role::Jester);
+        play(&mut game, |g, t| match t.kind {
+            TurnKind::DayVote => g
+                .living()
+                .find(|&p| g.is_wolf(p) && p != t.player)
+                .and_then(target),
+            _ => None,
+        });
+        assert_eq!(game.winner(), Some(Team::Village));
+        assert!(!game.won(jester));
+    }
+
+    #[test]
+    fn a_jester_in_love_with_a_wolf_can_win_with_the_lovers() {
+        let mut game = jester_game(6, false, true, 46);
+        let wolf = seat_with(&game, Role::Werewolf);
+        let jester = seat_with(&game, Role::Jester);
+        link(&mut game, wolf, jester);
+        play(&mut game, spare_lovers);
+        assert_eq!(game.winner(), Some(Team::Lovers));
+        assert!(game.won(jester) && game.won(wolf));
     }
 }

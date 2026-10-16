@@ -2,7 +2,8 @@
 // which updates `game.state` and tells listeners about each event (with `live` false on replay).
 
 export const ROLE_LABEL = {
-  werewolf: "Werewolf", seer: "Seer", doctor: "Doctor", sheriff: "Sheriff", cupid: "Cupid", villager: "Villager",
+  werewolf: "Werewolf", seer: "Seer", doctor: "Doctor", sheriff: "Sheriff", cupid: "Cupid", jester: "Jester",
+  villager: "Villager",
 };
 export const KIND_LABEL = {
   day_speak: "day speech", day_vote: "day vote", wolf_chat: "wolf chat",
@@ -15,6 +16,7 @@ export const ROLE_GOAL = {
   doctor: "Each night, protect one player from the wolves (not the same player two nights in a row).",
   sheriff: "You have one bullet. Any time during the day's discussion, you may fire it. Hit a wolf and only they die; hit anyone else and you die too. Firing reveals you.",
   cupid: "On the first night, pick two players to fall in love (you may pick yourself). If one lover dies, the other dies of a broken heart.",
+  jester: "Get the village to vote you out. If they do, you win alone and the game goes on without you. Dying any other way wins nothing.",
   villager: "Find the werewolves and vote them out before they eat the village.",
 };
 
@@ -24,7 +26,7 @@ export function rulesLine(s) {
   const wolves = s.wolves == null ? "auto wolves" : s.wolves + (s.wolves === 1 ? " wolf" : " wolves");
   const secs = Number(s.discussion_secs) || 0;
   const talk = secs % 60 === 0 ? secs / 60 + " min talk" : Math.round(secs) + "s talk";
-  return [wolves, s.sheriff && "sheriff", s.cupid && "cupid", talk].filter(Boolean).join(" · ");
+  return [wolves, s.sheriff && "sheriff", s.cupid && "cupid", s.jester && "jester", talk].filter(Boolean).join(" · ");
 }
 
 export function emptyState() {
@@ -45,6 +47,8 @@ export function emptyState() {
     settings: null,
     // Sheriff who fired last, so the shot's deaths can name them.
     lastShot: null,
+    // The Jester, once the village has voted them out (their win).
+    jesterWon: null,
     // Cupid's pair [a, b] when this viewer saw the link (spectator, Cupid).
     lovers: null,
     // This viewer's own partner when they are a lover: { partner, partner_role }.
@@ -223,6 +227,7 @@ export class Game {
         }
         s.roles[ev.player] = ev.role;
         delete s.pending[ev.player];
+        if (ev.role === "jester" && ev.cause === "vote") s.jesterWon = ev.player;
         break;
       }
       case "game_over":

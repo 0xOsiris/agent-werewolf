@@ -22,9 +22,12 @@ pub enum Role {
     Sheriff,
     /// Village matchmaker who links two Lovers on night 1.
     Cupid,
+    /// Wins alone by being voted out; counts as a non-wolf for parity and the Lovers.
+    Jester,
 }
 
 impl Role {
+    /// The Jester sits on the village side for counting only; it never shares the village's win.
     pub fn team(self) -> Team {
         match self {
             Role::Werewolf => Team::Wolves,

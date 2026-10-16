@@ -33,6 +33,12 @@ pub struct Config {
     /// Play without a cupid.
     #[arg(long, overrides_with = "cupid")]
     pub no_cupid: bool,
+    /// Deal one villager the jester role, who wins by being voted out.
+    #[arg(long, overrides_with = "no_jester")]
+    pub jester: bool,
+    /// Play without a jester (the default).
+    #[arg(long, overrides_with = "jester")]
+    pub no_jester: bool,
     /// Start automatically once this many players have joined.
     #[arg(long)]
     pub auto_start: Option<usize>,
@@ -99,6 +105,11 @@ impl Config {
         !self.no_cupid
     }
 
+    /// Off unless `--jester` was given last.
+    pub fn jester(&self) -> bool {
+        self.jester
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         ensure!(
             self.min_players >= MIN_PLAYERS,
@@ -109,7 +120,7 @@ impl Config {
             "--max-players must be >= --min-players"
         );
         if let Some(wolves) = self.wolves {
-            let need = players_needed(wolves.get(), self.sheriff(), self.cupid());
+            let need = players_needed(wolves.get(), self.sheriff(), self.cupid(), self.jester());
             ensure!(
                 need <= self.max_players,
                 "--wolves {wolves} needs at least {need} players, but --max-players is {}",

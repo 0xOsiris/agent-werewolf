@@ -17,6 +17,7 @@
   --sheriff-tint: rgba(232, 176, 74, 0.16);
   --cupid: #ff77a8;
   --cupid-tint: rgba(255, 119, 168, 0.16);
+  --jester: #b5e550;
   --villager: #c9cde0;
   --death: #ff8a65;
   --ink: #1a1c2c;
@@ -53,6 +54,7 @@ body.day {
   --sheriff-tint: rgba(154, 106, 18, 0.12);
   --cupid: #c2185b;
   --cupid-tint: rgba(194, 24, 91, 0.10);
+  --jester: #5a7d00;
   --ghost: #6f7792;
   --ghost-tint: rgba(111, 119, 146, 0.12);
   --villager: #4a4f63;
@@ -127,6 +129,7 @@ canvas.pixel, .pixel { image-rendering: pixelated; image-rendering: crisp-edges;
 .nt-role.role-doctor { color: #6ff0b5; }
 .nt-role.role-sheriff { color: #ffd27a; }
 .nt-role.role-cupid { color: #ffa8c8; }
+.nt-role.role-jester { color: #cff08a; }
 .nt-role.role-villager { color: #e0e4f2; }
 
 .bubble-stack {
@@ -191,6 +194,7 @@ canvas.pixel, .pixel { image-rendering: pixelated; image-rendering: crisp-edges;
 .thought.role-doctor { --think-role: #0f8a5f; }
 .thought.role-sheriff { --think-role: #9a6a12; }
 .thought.role-cupid { --think-role: #c2185b; }
+.thought.role-jester { --think-role: #5a7d00; }
 .thought-head {
   font-size: 0.72em; font-weight: 900; letter-spacing: 0.06em; text-transform: uppercase; color: var(--think-role);
 }
@@ -382,6 +386,7 @@ canvas.pixel, .pixel { image-rendering: pixelated; image-rendering: crisp-edges;
 .role-tag.role-doctor { background: var(--doctor); }
 .role-tag.role-sheriff { background: var(--sheriff); }
 .role-tag.role-cupid { background: var(--cupid); }
+.role-tag.role-jester { background: var(--jester); color: var(--ink); }
 .act {
   display: grid;
   gap: 6px;
@@ -538,6 +543,7 @@ textarea { resize: vertical; min-height: 96px; }
 .role-card.role-doctor .role-name { color: var(--doctor); }
 .role-card.role-sheriff .role-name { color: var(--sheriff); }
 .role-card.role-cupid .role-name { color: var(--cupid); }
+.role-card.role-jester .role-name { color: var(--jester); }
 .role-card p { margin: 2px 0 0; }
 .role-card .pack { margin-top: 4px; font-weight: 800; color: var(--wolf); }
 .role-card .pack:empty, .role-card .love:empty { display: none; }
@@ -633,6 +639,7 @@ body.has-action .spacer-for-action { height: 50vh; }
 .roles-list .r-werewolf { color: var(--wolf); font-weight: 800; }
 .roles-list .r-sheriff { color: var(--sheriff); font-weight: 800; }
 .roles-list .r-cupid { color: var(--cupid); font-weight: 800; }
+.roles-list .r-jester { color: var(--jester); font-weight: 800; }
 
 @media (min-width: 900px) {
   .play-grid { grid-template-columns: minmax(0, 1fr) 380px; align-items: start; }

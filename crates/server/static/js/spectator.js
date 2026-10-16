@@ -45,6 +45,7 @@ const PRESETS = [
   { label: "Werewolves", options: [["Auto", { wolves: null }], ["1", { wolves: 1 }], ["2", { wolves: 2 }], ["3", { wolves: 3 }]] },
   { label: "Sheriff", options: [["On", { sheriff: true }], ["Off", { sheriff: false }]] },
   { label: "Cupid", options: [["On", { cupid: true }], ["Off", { cupid: false }]] },
+  { label: "Jester", options: [["On", { jester: true }], ["Off", { jester: false }]] },
   { label: "Discussion", options: [["1 min", { discussion_secs: 60 }], ["2 min", { discussion_secs: 120 }], ["3 min", { discussion_secs: 180 }]] },
   {
     label: "AI chattiness",

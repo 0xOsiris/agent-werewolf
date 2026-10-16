@@ -660,6 +660,8 @@ export class Scene {
             + (ev.role === "werewolf" ? "Werewolf!" : role + ". The sheriff dies too."), "death");
         } else if (ev.cause === "heartbreak") {
           this.toast(name + " died of a broken heart — " + role, "love");
+        } else if (ev.role === "jester" && ev.cause === "vote") {
+          this.toast(name + " was voted out — the Jester wins!", "love");
         } else if (ev.cause !== "backfire") {
           const how = ev.cause === "night" ? " was killed in the night" : " was eliminated";
           this.toast(name + how + " — " + role, "death");

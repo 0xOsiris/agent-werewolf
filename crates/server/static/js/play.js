@@ -151,7 +151,7 @@ function render() {
   $("role-love").textContent = partner === null ? ""
     : "You're in love with " + game.nameOf(partner) + (s.roles[partner] ? " (" + (ROLE_LABEL[s.roles[partner]] || s.roles[partner]) + ")" : "")
       + ". If one of you dies, so does the other.";
-  $("private-card").hidden = !role || ((role === "villager" || role === "sheriff") && partner === null);
+  $("private-card").hidden = !role || (["villager", "sheriff", "jester"].includes(role) && partner === null);
   const rules = rulesLine(s.settings);
   $("role-rules").textContent = rules ? "Rules: " + rules : "";
   $("status-rules").textContent = rules && s.phase.kind === "lobby" ? "Rules: " + rules : "";
@@ -657,7 +657,10 @@ function showGameOver(winner, view) {
     : game.state.roles[partner] || (view && view.players.find((p) => p.id === partner)?.revealed_role);
   // Lovers from opposite teams only ever win together, as "lovers".
   const torn = !!(role && partnerRole && teamOf(role) !== teamOf(partnerRole));
-  const won = !role ? null : winner === "lovers" ? partner !== null : teamOf(role) === winner && !torn;
+  const jesterWon = game.state.jesterWon;
+  // The Jester never shares a team win: only being voted out, or a Lovers win, counts.
+  const won = !role ? null : winner === "lovers" ? partner !== null
+    : role === "jester" ? jesterWon === you() : teamOf(role) === winner && !torn;
   const res = $("go-result");
   res.textContent = won === null ? "Game over" : won ? "You won!" : "You lost";
   res.className = "result" + (won === null ? "" : won ? " win" : " lose");
@@ -666,7 +669,9 @@ function showGameOver(winner, view) {
   const pair = game.lovers(you()) || (winner === "lovers" && standing.length === 2 ? standing : null);
   let text = { village: "The village wins!", wolves: "The werewolves win!", lovers: "The lovers win!" }[winner] || "Game over";
   if (winner === "lovers" && pair) text += " " + game.nameOf(pair[0]) + " ♥ " + game.nameOf(pair[1]);
-  else if (torn && teamOf(role) === winner) text += " Your love crossed sides, so your team's win isn't yours.";
+  else if (torn && teamOf(role) === winner && role !== "jester") text += " Your love crossed sides, so your team's win isn't yours.";
+  if (jesterWon !== null) text += " " + (jesterWon === you() ? "You" : game.nameOf(jesterWon)) + " won as the Jester too.";
+  else if (role === "jester" && !won) text += " The Jester only wins by getting voted out.";
   $("go-winner").textContent = text;
   $("again-hint").textContent = "";
   renderRoles(view);

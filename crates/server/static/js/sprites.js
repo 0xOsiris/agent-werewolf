@@ -424,6 +424,8 @@ function buildShared() {
     { y: "#ffd23f", Y: "#b8860b" });
   MINI.cupid = buildSprite([grid(["2.2h.2h2.", "1.7h1.", "2a5h2a", "2.5h2.", "3.3h3.", "4.h4."], 9, 6)],
     { h: "#ff77a8", a: "#ffd23f" });
+  MINI.jester = buildSprite([grid(["y2.y2.y", "g2.p2.g", "2g.p.2g", ".2gp2g.", "7y", "yYyYyYy"], 7, 6)],
+    { y: "#ffd23f", Y: "#b8860b", g: "#b5e550", p: "#b07cff" });
   MINI.villager = buildSprite([grid(["m.m.m", "m.m.m", "5m", "2.w2.", "2.w2.", "2.w2.", "2.w2."], 5, 7)],
     { m: "#d6dae8", w: "#c08040" });
   ICONS.werewolf = buildSprite([grid(["g9.g", "2g7.2g", "11g", "11g", "2gy5gy2g", "11g",
@@ -440,6 +442,10 @@ function buildShared() {
   ICONS.cupid = buildSprite([grid(["..bbs........", ".b..s........", ".b..s..hh.hh.", "b...s.hwhhhhh", "b.f.s.hhhhhhh",
     "b.aaaaahhhhh.", "b.f.s...hhh..", "b...s....h...", ".b..s........", ".b..s........", "..bbs........"], 13, 11)],
   { b: "#c08040", s: "#f2e9dc", a: "#ffd23f", f: "#ffffff", h: "#ff77a8", w: "#ffe0ee" });
+  // A three-pointed jester's cap with bells on the tips.
+  ICONS.jester = buildSprite([grid(["y4.y4.y", "g4.p4.g", "2g3.p3.2g", ".2g.3p.2g.", ".3g3p3g.", "1.9y1.",
+    "1.yYyYyYyYy1."], 11, 7)],
+  { y: "#ffd23f", Y: "#b8860b", g: "#b5e550", p: "#b07cff" });
   ICONS.villager = buildSprite([grid(["m2.m2.m", "m2.m2.m", "m2.m2.m", "7m", "3.w3.", "3.w3.", "3.w3.",
     "3.w3.", "3.w3.", "3.w3.", "3.w3."], 7, 11)],
   { m: "#d6dae8", w: "#c08040" });

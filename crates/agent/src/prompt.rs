@@ -17,11 +17,12 @@ const RULES: &str = "\
 You are playing Werewolf, a social deduction game, with other players: some are AIs, some are humans. An audience is watching live.
 
 RULES
-- Roles: werewolves (about 1 in 4 players), one seer, one doctor, maybe one sheriff, maybe one cupid, and villagers. The werewolves know each other; everyone else knows only their own role.
+- Roles: werewolves (about 1 in 4 players), one seer, one doctor, maybe one sheriff, maybe one cupid, maybe one jester, and villagers. The werewolves know each other; everyone else knows only their own role.
 - Night: the werewolves chat privately and pick a victim. The seer learns whether one player is a werewolf. The doctor protects one player from the kill, but never the same player two nights in a row.
 - Day: the night's death is announced, everyone talks at once in an open discussion, then everyone votes. The most votes is eliminated; a tie eliminates nobody. Dead players' roles are revealed.
 - Sheriff (some games have one): at any moment during a day's discussion, the sheriff may fire their only bullet of the game. A werewolf hit dies alone; anyone else hit dies and the sheriff dies too. Firing reveals the sheriff.
 - Cupid and Lovers (some games have them): on the first night, Cupid secretly picks two Lovers, possibly including themselves. Each Lover learns the other's identity and role. If one Lover dies, the other dies of heartbreak at once.
+- Jester (some games have one): wins alone if the village votes them out, and the game goes on without them. Dying any other way wins them nothing. The Jester is not a werewolf, and the seer sees them as one.
 - The village wins when every werewolf is dead. The werewolves win when they equal or outnumber everyone else, or if the game reaches day 10. A werewolf and a non-werewolf in love win together, and only together, if they are the last two players alive.";
 
 const WEREWOLF: &str = "\
@@ -57,6 +58,13 @@ You are CUPID, on the village team. You win when every werewolf is dead.
 - Picking yourself gives you one player whose role you know for sure, but ties your life to theirs.
 - Linking a werewolf with a villager turns both against everyone else: they can then only win as the last two alive.
 - After the first night you have no power. Play like a villager and keep your role and your Lovers secret.";
+
+const JESTER: &str = "\
+You are the JESTER. You win, alone, if the village votes you out in a day vote; the game then goes on without you. You never win with the village or the wolves.
+- Be suspicious enough to draw votes: hedge, flip your opinion, defend someone a little too hard, or make a claim that is easy to doubt.
+- Never admit you are the Jester, and don't overdo it: if the village guesses, they will refuse to vote for you.
+- Dying at night or to the sheriff's gun wins you nothing, so don't look like the seer or anyone the wolves want dead.
+- Your own vote barely matters to you; use it to stir things up.";
 
 const VILLAGER: &str = "\
 You are a VILLAGER. You win when every werewolf is dead. You have no night power; your tools are attention and your vote.
@@ -102,6 +110,7 @@ pub fn system(role: Role, persona: Option<&str>) -> String {
         Role::Doctor => DOCTOR,
         Role::Sheriff => SHERIFF,
         Role::Cupid => CUPID,
+        Role::Jester => JESTER,
         Role::Villager => VILLAGER,
     };
     let mut prompt = format!("{RULES}\n\nYOUR ROLE\n{role}\n\n{STYLE}");
@@ -201,7 +210,8 @@ fn render_view(out: &mut String, names: &Names<'_>) {
             names.get(partner),
             role_with_article(partner_role)
         );
-        if view.role.team() != partner_role.team() {
+        // Being voted out is the Jester's own win, so "your only way to win" would mislead them.
+        if view.role.team() != partner_role.team() && view.role != Role::Jester {
             out.push_str(" Your only way to win is for you two to be the last players alive, so quietly work against everyone else.");
         }
         out.push('\n');
@@ -274,11 +284,17 @@ fn render_public(out: &mut String, event: &PublicEvent, names: &Names<'_>) {
                 DeathCause::Backfire => "died from a misfire",
                 DeathCause::Heartbreak => "died of a broken heart",
             };
+            let jester_won = *role == Role::Jester && *cause == DeathCause::Vote;
             writeln!(
                 out,
-                "{} {how}. They were {}.",
+                "{} {how}. They were {}.{}",
                 names.get(*player),
-                role_with_article(*role)
+                role_with_article(*role),
+                if jester_won {
+                    " Being voted out is the Jester's win; the game goes on."
+                } else {
+                    ""
+                }
             )
         }
         PublicEvent::Shot { sheriff, target } => writeln!(
@@ -552,6 +568,7 @@ const fn role_with_article(role: Role) -> &'static str {
         Role::Doctor => "the Doctor",
         Role::Sheriff => "the Sheriff",
         Role::Cupid => "Cupid",
+        Role::Jester => "the Jester",
         Role::Villager => "a Villager",
     }
 }
@@ -920,6 +937,34 @@ mod tests {
         let prompt = user(&turn(v, TurnKind::DayVote, vec![BOB]));
         assert!(prompt.contains("- Bob: alive, revealed as the Sheriff"));
         assert!(prompt.contains("- Carol: dead, was the Seer"));
+    }
+
+    #[test]
+    fn jester_role_and_win_are_rendered() {
+        let jester = system(Role::Jester, None);
+        assert!(jester.contains(
+            "You are the JESTER. You win, alone, if the village votes you out in a day vote"
+        ));
+        assert!(system(Role::Villager, None).contains("Jester (some games have one)"));
+
+        let mut v = view(ALICE, Role::Villager, vec![]);
+        v.public_log.extend([
+            PublicEvent::Died {
+                player: BOB,
+                role: Role::Jester,
+                cause: DeathCause::Vote,
+            },
+            PublicEvent::Died {
+                player: DAVE,
+                role: Role::Jester,
+                cause: DeathCause::Night,
+            },
+        ]);
+        let prompt = user(&turn(v, TurnKind::DayVote, vec![CAROL]));
+        assert!(prompt.contains(
+            "Bob was eliminated by vote. They were the Jester. Being voted out is the Jester's win; the game goes on."
+        ));
+        assert!(prompt.contains("Dave was killed in the night. They were the Jester.\n"));
     }
 
     #[test]

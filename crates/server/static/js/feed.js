@@ -167,7 +167,8 @@ export class Feed {
         break;
       case "died": {
         const how = DEATH_HOW[ev.cause] || " died";
-        this.append(el("div", "divider death", name(ev.player) + how + " — " + (ROLE_LABEL[ev.role] || ev.role)));
+        const jester = ev.role === "jester" && ev.cause === "vote" ? ". The Jester wins!" : "";
+        this.append(el("div", "divider death", name(ev.player) + how + " — " + (ROLE_LABEL[ev.role] || ev.role) + jester));
         break;
       }
       case "peaceful_night":

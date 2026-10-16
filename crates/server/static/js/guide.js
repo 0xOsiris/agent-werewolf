@@ -4,13 +4,13 @@ import { ROLE_LABEL, ROLE_GOAL } from "./events.js";
 
 const ROLES = [
   ["werewolf", "wolf"], ["villager", "villager"], ["seer", "seer"],
-  ["doctor", "doctor"], ["sheriff", "sheriff"], ["cupid", "cupid"],
+  ["doctor", "doctor"], ["sheriff", "sheriff"], ["cupid", "cupid"], ["jester", "jester"],
 ];
 const RULES = [
   ["Night", "Wolves pick a victim. The seer and doctor act in secret."],
   ["Day", "The night's death is announced. Everyone talks, and the sheriff may shoot at any moment. Then everyone votes. Most votes is out; a tie saves everyone."],
   ["Lovers", "If one Lover dies, so does the other. A wolf and a villager in love win only as the last two alive."],
-  ["Winning", "The village wins when every wolf is dead. Wolves win when they equal or outnumber everyone else, or reach day 10."],
+  ["Winning", "The village wins when every wolf is dead. Wolves win when they equal or outnumber everyone else, or reach day 10. A Jester, if the host adds one, wins alone by getting voted out."],
   ["Death", "Dead players' roles are revealed. Once two are dead, ghosts chat in the Graveyard by day; the living never see it."],
 ];
 

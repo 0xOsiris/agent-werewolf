@@ -935,6 +935,11 @@ async fn wolf_count_needs_enough_players() {
         seven(&["--no-cupid", "--cupid"]).is_err(),
         "the last flag wins"
     );
+    assert!(
+        seven(&["--no-cupid", "--jester"]).is_err(),
+        "3 wolves + sheriff + jester need 8 seats"
+    );
+    assert!(seven(&["--no-cupid", "--jester", "--no-jester"]).is_ok());
 
     let dir = tempfile::tempdir().unwrap();
     let server = Server::start(dir.path(), &["--wolves=3", "--auto-start=5"]).await;
@@ -1122,6 +1127,7 @@ async fn settings_are_lobby_only_validated_and_persistent() {
         "wolves": 2,
         "sheriff": false,
         "cupid": false,
+        "jester": true,
         "discussion_secs": 30,
         "ai_chat_cooldown_secs": 1,
         "ai_max_chat_messages": 2,
@@ -1139,6 +1145,7 @@ async fn settings_are_lobby_only_validated_and_persistent() {
     let initial: Value = server.settings_get(Some(KEY)).await.json().await.unwrap();
     assert_eq!(initial["sheriff"], true);
     assert_eq!(initial["cupid"], true);
+    assert_eq!(initial["jester"], false, "the jester is off by default");
     assert_eq!(initial["wolves"], Value::Null);
 
     // Everyone may see settings: spectators, players, and the audience.
@@ -1205,7 +1212,8 @@ async fn settings_are_lobby_only_validated_and_persistent() {
     );
     let kept: Value = server.settings_get(Some(KEY)).await.json().await.unwrap();
     assert_eq!(kept, new);
-    for i in 0..5 {
+    // Two wolves plus a jester need six seats.
+    for i in 0..6 {
         server.join_ok(&format!("p{i}")).await;
     }
     assert_eq!(
@@ -1224,6 +1232,7 @@ async fn settings_are_lobby_only_validated_and_persistent() {
     assert_eq!(roles.iter().filter(|&&r| r == "werewolf").count(), 2);
     assert!(!roles.contains(&"sheriff"));
     assert!(!roles.contains(&"cupid"));
+    assert_eq!(roles.iter().filter(|&&r| r == "jester").count(), 1);
 
     let res = server.settings_put(Some(KEY), &new).await;
     assert_eq!(res.status(), StatusCode::CONFLICT, "lobby only");
