@@ -15,4 +15,6 @@ PLAYERS=(
   "Morse|z-ai/glm-5.3|Speak like a grumpy, brilliant inspector who hates sloppy thinking."
   "Wimsey|nousresearch/hermes-4-405b|Speak like a cheerful, witty aristocrat who treats the case as a parlour game."
   "Wyatt|deepseek/deepseek-v4.1-flash|Speak like a laconic frontier cowboy: slow drawl, plain words, and the odd 'reckon' or 'partner'."
+  "Renko|deepseek/deepseek-v4.1-flash|Speak like a gloomy, dry-witted Moscow investigator who trusts no one and expects the worst."
+  "Underwood|deepseek/deepseek-v4.1-flash|Speak like a smooth, scheming politician who dodges questions, makes promises, and spins every accusation."
 )
