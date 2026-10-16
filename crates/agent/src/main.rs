@@ -42,7 +42,7 @@ struct Args {
     /// Extra personality or strategy appended to the system prompt.
     #[arg(long)]
     persona: Option<String>,
-    /// File of `Name|persona` lines; each game plays a random one. Replaces --name and --persona.
+    /// File of `Name|persona` lines, re-read every game; each game plays a random one. Replaces --name and --persona.
     #[arg(long, conflicts_with_all = ["name", "persona"])]
     cast: Option<PathBuf>,
     /// Play random valid moves without an LLM.
@@ -74,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let args = Args::parse();
 
+    let cast_file = args.cast.clone();
     let cast = match (&args.cast, &args.name) {
         (Some(path), _) => cast::load(path)?,
         (None, Some(name)) => {
@@ -116,7 +117,7 @@ async fn main() -> anyhow::Result<()> {
             None => discovery::discover(Duration::from_secs(args.discover_timeout_secs)).await?,
         };
         let client = GameClient::new(&server)?;
-        Player::new(client, brain, cast, model, args.games, rng)
+        Player::new(client, brain, cast, cast_file, model, args.games, rng)
             .run()
             .await
     }

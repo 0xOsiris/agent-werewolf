@@ -3,7 +3,7 @@
 use crate::{
     backoff::Backoff,
     brain::Brain,
-    cast::Character,
+    cast::{self, Character},
     client::GameClient,
     http::HttpError,
     reply::{Decision, is_speak},
@@ -11,7 +11,7 @@ use crate::{
 use anyhow::bail;
 use rand::{rngs::StdRng, seq::IndexedRandom};
 use reqwest::StatusCode;
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 use tokio::time::{Instant, sleep};
 use tracing::{Instrument, debug, info_span, warn};
 use werewolf_protocol::{ActRequest, JoinRequest, PlayerView, Poll, Team, Turn};
@@ -33,6 +33,8 @@ pub struct Player {
     brain: Brain,
     /// Each game plays one of these at random.
     cast: Vec<Character>,
+    /// Re-read before each game, so edits apply without a restart.
+    cast_file: Option<PathBuf>,
     model: String,
     /// 0 plays forever.
     games: u32,
@@ -54,6 +56,7 @@ impl Player {
         client: GameClient,
         brain: Brain,
         cast: Vec<Character>,
+        cast_file: Option<PathBuf>,
         model: String,
         games: u32,
         rng: StdRng,
@@ -62,9 +65,22 @@ impl Player {
             client,
             brain,
             cast,
+            cast_file,
             model,
             games,
             rng,
+        }
+    }
+
+    /// Picks up edits to the cast file; a broken edit keeps the last good cast.
+    fn reload_cast(&mut self) {
+        let Some(path) = &self.cast_file else { return };
+        match cast::load(path) {
+            Ok(cast) => self.cast = cast,
+            Err(err) => warn!(
+                error = format!("{err:#}"),
+                "cast file unusable; keeping the previous cast"
+            ),
         }
     }
 
@@ -73,6 +89,7 @@ impl Player {
         // Shared across sessions so a server that keeps rejecting fresh tokens still hits the outage limit.
         let mut outage = Backoff::new(RETRY_BASE, RETRY_CAP, OUTAGE_GIVE_UP);
         loop {
+            self.reload_cast();
             let (token, character) = self.join().await?;
             self.brain.set_persona(character.persona.clone());
             let span = info_span!("game", player = %character.name);
@@ -390,6 +407,7 @@ mod tests {
             client,
             brain,
             cast,
+            None,
             "mock".into(),
             1,
             StdRng::seed_from_u64(1),
@@ -437,6 +455,7 @@ mod tests {
                 client,
                 Brain::Mock(MockBrain::new(Some(1))),
                 cast.to_vec(),
+                None,
                 "mock".into(),
                 1,
                 StdRng::seed_from_u64(seed),
@@ -453,6 +472,34 @@ mod tests {
                 "a taken name was retried: {tried:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_cast_file_is_reread_and_a_broken_edit_is_ignored() {
+        let path = std::env::temp_dir().join(format!("werewolf-cast-{}.txt", std::process::id()));
+        std::fs::write(&path, "Ada|one\n").unwrap();
+        let client = GameClient::new("http://127.0.0.1:9").unwrap();
+        let brain = Brain::Mock(MockBrain::new(Some(1)));
+        let cast = vec![Character::new("Old", None).unwrap()];
+        let mut player = Player::new(
+            client,
+            brain,
+            cast,
+            Some(path.clone()),
+            "mock".into(),
+            1,
+            StdRng::seed_from_u64(1),
+        );
+        player.reload_cast();
+        assert_eq!(player.cast, [Character::new("Ada", Some("one")).unwrap()]);
+        std::fs::write(&path, "Ada|one\nada|dup\n").unwrap();
+        player.reload_cast();
+        assert_eq!(
+            player.cast.len(),
+            1,
+            "a broken edit keeps the last good cast"
+        );
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[tokio::test]
