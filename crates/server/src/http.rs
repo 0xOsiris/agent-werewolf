@@ -44,8 +44,8 @@ const KEEP_ALIVE: Duration = Duration::from_secs(15);
 
 pub fn router(app: Arc<AppState>) -> Router {
     Router::new()
-        .route("/", get(|| async { assets::serve("index.html") }))
-        .route("/play", get(|| async { assets::serve("play.html") }))
+        .route("/", get(|| async { assets::page("index.html") }))
+        .route("/play", get(|| async { assets::page("play.html") }))
         .route("/static/{*path}", get(static_file))
         .route("/qr.svg", get(qr))
         .route("/healthz", get(healthz))
