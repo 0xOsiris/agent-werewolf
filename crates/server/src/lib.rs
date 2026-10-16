@@ -8,6 +8,7 @@ mod engine;
 mod error;
 mod game_log;
 mod http;
+mod leaderboard;
 mod mdns;
 mod sanitize;
 mod settings;
@@ -46,7 +47,11 @@ pub async fn serve(
     } else {
         mdns::advertise(addr.port())
     };
-    let app = state::AppState::new(config, key, seed, site, shutdown.clone());
+    let dir = config.log_dir.clone();
+    let leaderboard = tokio::task::spawn_blocking(move || leaderboard::Leaderboard::load(&dir))
+        .await
+        .context("loading the leaderboard")?;
+    let app = state::AppState::new(config, key, seed, site, leaderboard, shutdown.clone());
     let served = axum::serve(listener, http::router(app))
         .with_graceful_shutdown(shutdown.cancelled_owned())
         .await

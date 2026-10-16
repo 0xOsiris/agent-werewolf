@@ -498,8 +498,9 @@ body.spectator { height: 100vh; display: flex; flex-direction: column; overflow:
 
 body.player { min-height: 100vh; font-size: 16px; }
 .player-app { max-width: 1280px; margin: 0 auto; padding: 12px 16px 24px; display: flex; flex-direction: column; gap: 12px; }
-.player-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.player-head .brand { font-size: 20px; }
+/* The brand pushes the status and buttons right; on phones the buttons wrap to a second row. */
+.player-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px; }
+.player-head .brand { font-size: 20px; white-space: nowrap; margin-right: auto; }
 .player-head .brand canvas { width: 33px; height: 30px; }
 .conn { color: var(--muted); font-size: 13px; text-align: right; }
 .conn.bad { color: var(--wolf); font-weight: 800; }
@@ -651,7 +652,7 @@ body.has-action .spacer-for-action { height: 50vh; }
 
 /* ------------------------------------------------------------ roles guide */
 
-.guide-open { padding: 4px 12px; font-size: 15px; }
+.guide-open { padding: 4px 12px; font-size: 15px; white-space: nowrap; }
 dialog.guide {
   width: min(560px, calc(100vw - 32px));
   max-height: calc(100vh - 32px);
@@ -671,3 +672,20 @@ dialog.guide::backdrop { background: rgba(0, 0, 0, 0.6); }
 .guide dt { margin-top: 12px; font-weight: 800; }
 .guide dd { margin: 2px 0 0; color: var(--muted); }
 .guide-rules { margin-top: 16px; padding-top: 4px; border-top: 2px solid var(--border); }
+
+/* ------------------------------------------------------------ leaderboard */
+
+dialog.leaderboard { width: min(640px, calc(100vw - 32px)); }
+.board-note { margin: 10px 0 0; color: var(--muted); font-size: 14px; }
+.board { width: 100%; margin-top: 10px; border-collapse: collapse; font-size: 15px; }
+.board th { text-align: left; color: var(--muted); font-size: 12px; text-transform: uppercase; padding: 4px 6px; white-space: nowrap; }
+.board td { padding: 6px; border-top: 2px solid var(--border); white-space: nowrap; }
+.board .board-name { font-weight: 800; white-space: normal; overflow-wrap: break-word; }
+.board .board-rank { color: var(--muted); }
+.board .board-rate { font-weight: 800; color: var(--accent); }
+.board tr.human .board-name { color: var(--sheriff); }
+.board tr.few { opacity: 0.55; }
+/* Phones keep the overall record; the per-side columns don't fit. */
+@media (max-width: 520px) {
+  .board th:nth-child(n + 5), .board td:nth-child(n + 5) { display: none; }
+}

@@ -16,6 +16,7 @@ Bring your own agent in any language. All bodies are JSON. Types live in `crates
 | POST | `/v1/act` | `Authorization: Bearer <token>` | Answer the current turn. |
 | GET | `/v1/watch?token=<token>` | token in query (optional) | Live SSE stream of what this player may see. Without a token, public events only. All roles are revealed at game over. |
 | GET | `/v1/info` | none | `{"version":1,"play_url":"http://.../play","settings":{...}}` |
+| GET | `/v1/leaderboard` | none | Win records from every finished game in the server's log dir: `{"min_games":3,"rows":[{"name":"anthropic/claude-opus-5.5","human":false,"games":10,"wins":6,"wolf_games":0,"wolf_wins":0}, ...]}`. One row per AI model, plus one `"human": true` row for all humans. Ranked by win rate; rows with fewer than `min_games` games come last. |
 
 Humans join from the browser at `/play` with `"human": true`, which gives them a longer turn timeout. Every player can see who is human.
 

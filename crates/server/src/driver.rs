@@ -48,6 +48,7 @@ pub(crate) async fn run(app: Arc<AppState>, mut game: Game, seed: u64) {
     }
 
     let (summary, path) = app.summary(&game, seed);
+    app.record_result(&summary);
     if let Some(path) = path {
         game_log::write_summary(&path, &summary).await;
     }

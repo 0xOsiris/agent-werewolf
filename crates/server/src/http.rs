@@ -31,6 +31,7 @@ use werewolf_protocol::{
 use crate::{
     assets,
     error::HttpError,
+    leaderboard::{MIN_GAMES, Row},
     settings::SettingsBody,
     spectator::{Broadcast, SpectatorEvent, Viewer},
     state::{AppState, Subscription, Watcher},
@@ -53,6 +54,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/v1/poll", get(poll))
         .route("/v1/act", post(act))
         .route("/v1/watch", get(watch))
+        .route("/v1/leaderboard", get(leaderboard))
         .route("/admin/start", post(admin_start))
         .route("/admin/reset", post(admin_reset))
         .route("/admin/settings", get(get_settings).put(put_settings))
@@ -88,6 +90,20 @@ async fn info(State(app): State<Arc<AppState>>) -> Json<Info> {
         version: PROTOCOL_VERSION,
         play_url: app.site().play_url.clone(),
         settings: app.settings(),
+    })
+}
+
+#[derive(Serialize)]
+struct LeaderboardBody {
+    /// Rows with fewer games rank last.
+    min_games: u32,
+    rows: Vec<Row>,
+}
+
+async fn leaderboard(State(app): State<Arc<AppState>>) -> Json<LeaderboardBody> {
+    Json(LeaderboardBody {
+        min_games: MIN_GAMES,
+        rows: app.leaderboard(),
     })
 }
 

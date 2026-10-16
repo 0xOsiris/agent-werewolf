@@ -382,7 +382,26 @@ async fn six_bots_play_to_completion() {
         "{summary}"
     );
 
+    // The finished game counts at once, and a restart rebuilds the same board from the summary.
+    let wins = players.iter().filter(|p| p["won"] == true).count();
+    let expected = serde_json::json!({
+        "min_games": 3,
+        "rows": [{
+            "name": "test/random",
+            "human": false,
+            "games": 6,
+            "wins": wins,
+            "wolf_games": players.iter().filter(|p| p["role"] == "werewolf").count(),
+            "wolf_wins": players.iter().filter(|p| p["role"] == "werewolf" && p["won"] == true).count(),
+        }],
+    });
+    let board: Value = server.get("/v1/leaderboard").await.json().await.unwrap();
+    assert_eq!(board, expected);
     server.stop().await;
+    let restarted = Server::start(dir.path(), &[]).await;
+    let board: Value = restarted.get("/v1/leaderboard").await.json().await.unwrap();
+    assert_eq!(board, expected, "rebuilt from the summary on disk");
+    restarted.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

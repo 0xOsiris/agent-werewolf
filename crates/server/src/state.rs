@@ -25,6 +25,7 @@ use crate::{
     engine::{Answer, Game, TurnSpec},
     error::HttpError,
     game_log::{GameLog, GameSummary, PlayerSummary, ShotSummary},
+    leaderboard::{Leaderboard, Row},
     sanitize,
     settings::{Settings, SettingsBody},
     site::Site,
@@ -47,6 +48,8 @@ pub struct AppState {
     seed: u64,
     site: Site,
     inner: Mutex<Inner>,
+    /// Kept apart from `inner` so reading it never waits on the game.
+    leaderboard: Mutex<Leaderboard>,
     /// Bumped whenever a player's poll result may have changed.
     changed: watch::Sender<u64>,
     /// Wakes the driver when a player answers.
@@ -130,6 +133,7 @@ impl AppState {
         spectator_key: String,
         seed: u64,
         site: Site,
+        leaderboard: Leaderboard,
         shutdown: CancellationToken,
     ) -> Arc<Self> {
         let (events, _) = broadcast::channel(EVENT_BUFFER);
@@ -155,6 +159,7 @@ impl AppState {
                 log: None,
                 events,
             }),
+            leaderboard: Mutex::new(leaderboard),
             changed: watch::Sender::new(0),
             answered: Notify::new(),
             shutdown,
@@ -648,6 +653,16 @@ impl AppState {
                 }
             })
             .collect()
+    }
+
+    /// Leaderboard rows, best first.
+    pub fn leaderboard(&self) -> Vec<Row> {
+        self.leaderboard.lock().ranked()
+    }
+
+    /// Counts a finished game on the leaderboard.
+    pub(crate) fn record_result(&self, summary: &GameSummary) {
+        self.leaderboard.lock().record(summary);
     }
 
     /// The end-of-game summary and where to write it.
