@@ -221,6 +221,7 @@ impl AppState {
             alive: true,
             revealed_role: None,
             human: req.human,
+            look: lobby_look(self.seed, inner.games_started).wrapping_add(player_id),
         };
         inner.seats.push(Seat {
             public: public.clone(),
@@ -929,6 +930,12 @@ fn is_chat(kind: TurnKind) -> bool {
     )
 }
 
+/// First outfit seed of a lobby; seats count up from it so neighbours still look different.
+fn lobby_look(seed: u64, lobby: u64) -> u32 {
+    let mixed = seed.wrapping_add(lobby.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    (mixed ^ (mixed >> 32)) as u32
+}
+
 fn role_entries(roles: &[Role]) -> Vec<RoleEntry> {
     (0..)
         .zip(roles)
@@ -954,4 +961,19 @@ fn remaining_ms(deadline: Instant) -> u64 {
 
 pub(crate) fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn every_lobby_reshuffles_outfits() {
+        let bases: HashSet<u32> = (0..50).map(|lobby| lobby_look(42, lobby)).collect();
+        assert_eq!(bases.len(), 50);
+        // The web UI picks shirts by `look % 12`, so lobbies should not all start on one shirt.
+        let shirts: HashSet<u32> = bases.iter().map(|b| b % 12).collect();
+        assert!(shirts.len() > 6, "{shirts:?}");
+    }
 }

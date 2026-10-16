@@ -763,6 +763,7 @@ mod tests {
                 alive: true,
                 revealed_role: None,
                 human: id == 0,
+                look: 0,
             })
             .collect()
     }

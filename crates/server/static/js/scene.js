@@ -488,11 +488,18 @@ export class Scene {
     const now = performance.now();
     players.forEach((p, i) => {
       let a = this.actors.get(p.id);
+      // Each lobby reshuffles outfits; older servers send no look, so fall back to the seat.
+      const look = p.look ?? p.id;
+      if (a && a.look !== look) {
+        a.look = look;
+        a.sprites = playerSprites(look);
+      }
       if (!a) {
         const s = this.seat(i, players.length);
         a = {
           id: p.id,
-          sprites: playerSprites(p.id),
+          look,
+          sprites: playerSprites(look),
           x: s.x, y: s.y, tx: s.x, ty: s.y,
           phase: (p.id * 1.7) % 6.28,
           spawnAt: spawn ? now : -1e9,

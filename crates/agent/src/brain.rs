@@ -35,6 +35,13 @@ impl Brain {
             Self::Mock(brain) => brain.decide(turn),
         }
     }
+
+    /// Sets the persona for the next game; mocks ignore it.
+    pub fn set_persona(&mut self, persona: Option<String>) {
+        if let Self::Llm(brain) = self {
+            brain.persona = persona;
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -51,8 +58,8 @@ pub struct LlmBrain {
 }
 
 impl LlmBrain {
-    pub const fn new(llm: OpenRouter, persona: Option<String>) -> Self {
-        Self { llm, persona }
+    pub const fn new(llm: OpenRouter) -> Self {
+        Self { llm, persona: None }
     }
 
     async fn decide(&self, turn: &Turn, deadline: Instant) -> Decision {
@@ -177,7 +184,7 @@ mod tests {
     fn brain(url: &str, call_timeout: Duration) -> Brain {
         let llm =
             OpenRouter::new(url, "test-key".into(), "test/model".into(), call_timeout).unwrap();
-        Brain::Llm(LlmBrain::new(llm, None))
+        Brain::Llm(LlmBrain::new(llm))
     }
 
     #[tokio::test]

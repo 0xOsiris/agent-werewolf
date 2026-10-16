@@ -156,6 +156,7 @@ mod tests {
             alive,
             revealed_role: None,
             human: false,
+            look: 0,
         };
         Turn {
             turn_id: 1,

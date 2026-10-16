@@ -3,11 +3,13 @@
 use crate::{
     backoff::Backoff,
     brain::Brain,
+    cast::Character,
     client::GameClient,
     http::HttpError,
     reply::{Decision, is_speak},
 };
 use anyhow::bail;
+use rand::{rngs::StdRng, seq::IndexedRandom};
 use reqwest::StatusCode;
 use std::time::Duration;
 use tokio::time::{Instant, sleep};
@@ -23,14 +25,18 @@ const OUTAGE_GIVE_UP: Duration = Duration::from_secs(120);
 const MAX_TURN_MS: u64 = 3_600_000;
 /// Pause before re-polling when the server re-offers a turn we already answered, so we don't spin.
 const ANSWERED_TURN_PAUSE: Duration = Duration::from_secs(1);
+/// The server's 409 body when another player already has the name.
+const NAME_TAKEN: &str = "name already taken";
 
 pub struct Player {
     client: GameClient,
     brain: Brain,
-    name: String,
+    /// Each game plays one of these at random.
+    cast: Vec<Character>,
     model: String,
     /// 0 plays forever.
     games: u32,
+    rng: StdRng,
 }
 
 /// Why a session (one join token) stopped.
@@ -44,19 +50,21 @@ enum SessionEnd {
 }
 
 impl Player {
-    pub const fn new(
+    pub fn new(
         client: GameClient,
         brain: Brain,
-        name: String,
+        cast: Vec<Character>,
         model: String,
         games: u32,
+        rng: StdRng,
     ) -> Self {
         Self {
             client,
             brain,
-            name,
+            cast,
             model,
             games,
+            rng,
         }
     }
 
@@ -65,11 +73,13 @@ impl Player {
         // Shared across sessions so a server that keeps rejecting fresh tokens still hits the outage limit.
         let mut outage = Backoff::new(RETRY_BASE, RETRY_CAP, OUTAGE_GIVE_UP);
         loop {
-            let token = self.join().await?;
-            match self.play(&token, &mut outage).await? {
+            let (token, character) = self.join().await?;
+            self.brain.set_persona(character.persona.clone());
+            let span = info_span!("game", player = %character.name);
+            match self.play(&token, &mut outage).instrument(span).await? {
                 SessionEnd::Finished { winner, view } => {
                     played += 1;
-                    print_result(&self.name, winner, &view);
+                    print_result(&character.name, winner, &view);
                     if self.games != 0 && played >= self.games {
                         return Ok(());
                     }
@@ -92,20 +102,37 @@ impl Player {
         }
     }
 
-    /// Returns a bearer token, waiting out a server that is down or mid-game.
-    async fn join(&self) -> anyhow::Result<String> {
-        let request = JoinRequest {
-            name: self.name.clone(),
-            model: Some(self.model.clone()),
-            human: false,
-        };
+    /// Joins as a random character from the cast, waiting out a server that is down or mid-game.
+    async fn join(&mut self) -> anyhow::Result<(String, Character)> {
         let mut backoff = Backoff::new(RETRY_BASE, RETRY_CAP, JOIN_GIVE_UP);
+        // Characters whose names are already in this lobby; tried again only once all are taken.
+        let mut taken: Vec<usize> = Vec::new();
         loop {
+            let free: Vec<usize> = (0..self.cast.len())
+                .filter(|i| !taken.contains(i))
+                .collect();
+            // The cast is never empty and `taken` never holds all of it, so `free` has a pick.
+            let pick = free.choose(&mut self.rng).copied().unwrap_or(0);
+            let character = self.cast[pick].clone();
+            let request = JoinRequest {
+                name: character.name.clone(),
+                model: Some(self.model.clone()),
+                human: false,
+            };
             let error = match self.client.join(&request).await {
-                Ok(joined) => return Ok(joined.token),
+                Ok(joined) => return Ok((joined.token, character)),
                 Err(error) => error,
             };
-            // 409 means a game is in progress; the next lobby will accept us.
+            if is_name_taken(&error) {
+                taken.push(pick);
+                if taken.len() < self.cast.len() {
+                    debug!(name = %character.name, "name taken; trying another character");
+                    continue;
+                }
+                // Every name is in use; back off, then draw from the whole cast again.
+                taken.clear();
+            }
+            // 409 means a game is in progress or every name is taken; the next lobby will accept us.
             if !error.is_retryable() && error.status() != Some(StatusCode::CONFLICT) {
                 bail!("server at {} refused the join: {error}", self.client.base());
             }
@@ -209,6 +236,10 @@ impl Player {
     }
 }
 
+fn is_name_taken(error: &HttpError) -> bool {
+    matches!(error, HttpError::Status { status: StatusCode::CONFLICT, body, .. } if body.contains(NAME_TAKEN))
+}
+
 /// Sleeps before retrying a failed call, or fails once the server has been failing for too long.
 async fn pause(outage: &mut Backoff, call: &'static str, error: &HttpError) -> anyhow::Result<()> {
     let Some(delay) = outage.next_delay() else {
@@ -240,8 +271,10 @@ mod tests {
     use crate::mock::MockBrain;
     use axum::{
         Json, Router,
+        response::IntoResponse,
         routing::{get, post},
     };
+    use rand::SeedableRng;
     use serde_json::json;
     use std::{
         io,
@@ -276,6 +309,7 @@ mod tests {
             alive: true,
             revealed_role: None,
             human: false,
+            look: 0,
         };
         let view = PlayerView {
             you: 0,
@@ -351,11 +385,74 @@ mod tests {
 
         let client = GameClient::new(&stale_act_server(kind).await).unwrap();
         let brain = Brain::Mock(MockBrain::new(Some(1)));
-        Player::new(client, brain, "Me".into(), "mock".into(), 1)
-            .run()
-            .await
-            .unwrap();
+        let cast = vec![Character::new("Me", None).unwrap()];
+        Player::new(
+            client,
+            brain,
+            cast,
+            "mock".into(),
+            1,
+            StdRng::seed_from_u64(1),
+        )
+        .run()
+        .await
+        .unwrap();
         String::from_utf8(logs.0.lock().unwrap().clone()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_taken_name_draws_another_character() {
+        let tried = Arc::new(Mutex::new(Vec::new()));
+        let seen = tried.clone();
+        let app = Router::new().route(
+            "/v1/join",
+            post(move |Json(req): Json<JoinRequest>| {
+                seen.lock().unwrap().push(req.name.clone());
+                async move {
+                    if req.name == "Cleo" {
+                        Json(JoinResponse {
+                            player_id: 0,
+                            token: "t".into(),
+                        })
+                        .into_response()
+                    } else {
+                        (
+                            StatusCode::CONFLICT,
+                            Json(json!({ "error": "name already taken" })),
+                        )
+                            .into_response()
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let cast = ["Ada", "Bob", "Cleo"].map(|n| Character::new(n, Some("p")).unwrap());
+        for seed in 0..5 {
+            tried.lock().unwrap().clear();
+            let client = GameClient::new(&url).unwrap();
+            let mut player = Player::new(
+                client,
+                Brain::Mock(MockBrain::new(Some(1))),
+                cast.to_vec(),
+                "mock".into(),
+                1,
+                StdRng::seed_from_u64(seed),
+            );
+            let (token, character) = player.join().await.unwrap();
+            assert_eq!((token.as_str(), character.name.as_str()), ("t", "Cleo"));
+            let tried = tried.lock().unwrap();
+            let mut unique = tried.clone();
+            unique.sort();
+            unique.dedup();
+            assert_eq!(
+                unique.len(),
+                tried.len(),
+                "a taken name was retried: {tried:?}"
+            );
+        }
     }
 
     #[tokio::test]

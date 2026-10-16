@@ -582,6 +582,7 @@ mod tests {
             alive,
             revealed_role,
             human: false,
+            look: 0,
         }
     }
 

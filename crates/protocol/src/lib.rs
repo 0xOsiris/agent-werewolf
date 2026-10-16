@@ -142,6 +142,9 @@ pub struct PublicPlayer {
     pub revealed_role: Option<Role>,
     #[serde(default)]
     pub human: bool,
+    /// Seeds this player's outfit in the web UI; it changes every lobby.
+    #[serde(default)]
+    pub look: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

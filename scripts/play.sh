@@ -74,12 +74,19 @@ if [ -z "$spectate" ]; then
 fi
 phone_url=$(curl -fsS --max-time 5 "$local_url/v1/info" | sed -n 's/.*"play_url":"\([^"]*\)".*/\1/p')
 
+# Every AI draws a fresh character (name and persona) from the whole roster each game.
+CAST=$(mktemp "${TMP_ROOT%/}/werewolf-cast.XXXXXX")
+for entry in "${PLAYERS[@]}"; do
+  IFS='|' read -r name _ persona <<<"$entry"
+  printf '%s|%s\n' "$name" "$persona"
+done >"$CAST"
+
 for entry in "${PLAYERS[@]:0:AIS}"; do
-  IFS='|' read -r name model persona <<<"$entry"
+  IFS='|' read -r _ model _ <<<"$entry"
   if ((mock)); then
-    "$BIN/werewolf-agent" --mock --name "$name" --server "$local_url" --games 0 &
+    "$BIN/werewolf-agent" --mock --cast "$CAST" --server "$local_url" --games 0 &
   else
-    "$BIN/werewolf-agent" --name "$name" --model "$model" --persona "$persona" --server "$local_url" --games 0 &
+    "$BIN/werewolf-agent" --model "$model" --cast "$CAST" --server "$local_url" --games 0 &
   fi
 done
 

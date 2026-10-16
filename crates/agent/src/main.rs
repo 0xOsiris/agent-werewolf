@@ -2,6 +2,7 @@
 
 mod backoff;
 mod brain;
+mod cast;
 mod chat;
 mod client;
 mod discovery;
@@ -14,22 +15,24 @@ mod reply;
 
 use anyhow::{Context, bail};
 use brain::{Brain, LlmBrain};
+use cast::Character;
 use clap::Parser;
 use client::GameClient;
 use game::Player;
 use llm::OpenRouter;
 use mock::MockBrain;
-use std::time::Duration;
+use rand::{SeedableRng, rngs::StdRng};
+use std::{path::PathBuf, time::Duration};
 use tracing::{Instrument, info_span};
 use tracing_subscriber::EnvFilter;
-use werewolf_protocol::{MAX_MODEL_LEN, MAX_NAME_LEN};
+use werewolf_protocol::MAX_MODEL_LEN;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "AI player for Agent Werewolf, powered by OpenRouter")]
 struct Args {
     /// Player name shown to everyone.
-    #[arg(long)]
-    name: String,
+    #[arg(long, required_unless_present = "cast")]
+    name: Option<String>,
     /// OpenRouter model id, e.g. `anthropic/claude-sonnet-4.5`.
     #[arg(long, required_unless_present = "mock")]
     model: Option<String>,
@@ -39,10 +42,13 @@ struct Args {
     /// Extra personality or strategy appended to the system prompt.
     #[arg(long)]
     persona: Option<String>,
+    /// File of `Name|persona` lines; each game plays a random one. Replaces --name and --persona.
+    #[arg(long, conflicts_with_all = ["name", "persona"])]
+    cast: Option<PathBuf>,
     /// Play random valid moves without an LLM.
     #[arg(long)]
     mock: bool,
-    /// RNG seed for --mock.
+    /// RNG seed for --mock and the --cast draw.
     #[arg(long)]
     seed: Option<u64>,
     /// Games to play before exiting; 0 plays forever.
@@ -68,10 +74,13 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let args = Args::parse();
 
-    let name = args.name.trim().to_owned();
-    if name.is_empty() || name.chars().count() > MAX_NAME_LEN {
-        bail!("--name must be 1 to {MAX_NAME_LEN} characters");
-    }
+    let cast = match (&args.cast, &args.name) {
+        (Some(path), _) => cast::load(path)?,
+        (None, Some(name)) => {
+            vec![Character::new(name, args.persona.as_deref()).context("--name")?]
+        }
+        (None, None) => bail!("--name is required unless --cast is set"),
+    };
     let model = match (&args.model, args.mock) {
         (_, true) => "mock".to_owned(),
         (Some(model), false) => model.trim().to_owned(),
@@ -96,17 +105,18 @@ async fn main() -> anyhow::Result<()> {
             model.clone(),
             Duration::from_secs(args.llm_timeout_secs),
         )?;
-        Brain::Llm(LlmBrain::new(llm, args.persona))
+        Brain::Llm(LlmBrain::new(llm))
     };
+    let rng = args.seed.map_or_else(rand::make_rng, StdRng::seed_from_u64);
 
-    let span = info_span!("agent", player = %name, model = %model);
+    let span = info_span!("agent", model = %model);
     async move {
         let server = match args.server {
             Some(server) => server,
             None => discovery::discover(Duration::from_secs(args.discover_timeout_secs)).await?,
         };
         let client = GameClient::new(&server)?;
-        Player::new(client, brain, name, model, args.games)
+        Player::new(client, brain, cast, model, args.games, rng)
             .run()
             .await
     }

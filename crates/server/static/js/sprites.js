@@ -185,7 +185,7 @@ function hash(n) {
   return (x ^ (x >>> 16)) >>> 0;
 }
 
-/** Deterministic look for a player id; consecutive ids get different shirts. */
+/** Deterministic look for a player's `look` seed; consecutive seeds get different shirts. */
 export function variantFor(id) {
   const h = hash(id);
   return {
@@ -209,7 +209,7 @@ const WOLF = {
   20: "3.3f2.3f3.", 21: "3.k.k2.k.k3.",
 };
 
-/** Every frame a player can show. Built once per player id. */
+/** Every frame a player can show, for a player's `look` seed. */
 export function playerSprites(id) {
   const v = variantFor(id);
   const acc = v.accessory;
