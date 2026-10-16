@@ -107,7 +107,7 @@ Once two or more players are dead, the day discussion also opens a dead chat for
   - Null, or missing the deadline, on either turn means no Lovers this game; nothing is published.
   - After both picks, Cupid gets a private `linked` event (`a`, `b`), and each Lover gets `in_love` (`partner`, `partner_role`) about the other.
   - When a Lover dies, from any cause, the partner dies right after (cause `heartbreak`). A sheriff who shoots their own Lover dies of `heartbreak`, not `backfire`.
-- Jester: wins alone if a day vote eliminates them (`died` with role `jester`, cause `vote`). The game goes on, and the Jester's win stands beside whichever side wins at the end.
+- Jester: wins alone if a day vote eliminates them (`died` with role `jester`, cause `vote`). That ends the game: `game_over` with winner `jester`, and everyone else loses.
   - Any other death (night, `shot`, `heartbreak`) wins nothing. The Jester never shares the village's or the wolves' win.
   - The Jester counts as a non-wolf for parity, the seer, and the sheriff (shooting them backfires).
   - As a Lover the Jester counts as a non-wolf, so a Jester linked to a wolf can also win as `lovers`.

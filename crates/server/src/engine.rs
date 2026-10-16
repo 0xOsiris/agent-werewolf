@@ -146,8 +146,6 @@ pub struct Game {
     bullet: bool,
     shot: Option<ShotRecord>,
     lovers: Option<(PlayerId, PlayerId)>,
-    /// The village voted the Jester out, which is the Jester's win.
-    jester_won: bool,
     winner: Option<Team>,
     public_log: Vec<PublicEvent>,
     private_log: Vec<(Audience, PrivateEvent)>,
@@ -212,7 +210,6 @@ impl Game {
             bullet: setup.sheriff,
             shot: None,
             lovers: None,
-            jester_won: false,
             winner: None,
             public_log: Vec::new(),
             private_log: Vec::new(),
@@ -260,8 +257,11 @@ impl Game {
     pub fn won(&self, player: PlayerId) -> bool {
         if self.role(player) == Role::Jester {
             // Being voted out is the Jester's own win; otherwise only a Lovers win can include them.
-            let lovers = self.winner == Some(Team::Lovers) && self.lover_of(player).is_some();
-            return self.jester_won || lovers;
+            return match self.winner {
+                Some(Team::Jester) => true,
+                Some(Team::Lovers) => self.lover_of(player).is_some(),
+                _ => false,
+            };
         }
         match self.winner {
             Some(Team::Lovers) => self.lover_of(player).is_some(),
@@ -590,11 +590,12 @@ impl Game {
             });
         }
         match leaders(&votes).as_slice() {
-            [condemned] => {
-                // Only the vote itself counts; a Jester dying of heartbreak alongside wins nothing.
-                self.jester_won |= self.role(*condemned) == Role::Jester;
-                self.kill(*condemned, DeathCause::Vote, self.phase);
+            // The village fell for it: the Jester wins alone, before any other win is checked.
+            [condemned] if self.role(*condemned) == Role::Jester => {
+                self.bury(*condemned, DeathCause::Vote, self.phase);
+                self.finish(Team::Jester);
             }
+            [condemned] => self.kill(*condemned, DeathCause::Vote, self.phase),
             _ => self.emit_public(PublicEvent::NoElimination),
         }
         if self.is_over() {
@@ -1889,22 +1890,23 @@ mod tests {
     }
 
     #[test]
-    fn a_voted_out_jester_wins_alone_and_the_game_goes_on() {
+    fn a_voted_out_jester_wins_alone_and_ends_the_game() {
         let mut game = jester_game(8, false, false, 41);
         let jester = seat_with(&game, Role::Jester);
-        let wolves = seats_with(&game, Role::Werewolf);
         play_until(&mut game, |_, _| None, |g| g.step == Step::DayVote);
         let events = step(&mut game, |_, t| {
             (t.player != jester).then(|| target(jester)).flatten()
         });
         assert_eq!(deaths(&events), [(jester, DeathCause::Vote)]);
-        assert!(!game.is_over(), "the game goes on without the Jester");
-        assert!(game.won(jester));
-
-        play(&mut game, wolves_feed);
-        assert_eq!(game.winner(), Some(Team::Wolves));
+        assert!(matches!(
+            public(&events).last(),
+            Some(PublicEvent::GameOver {
+                winner: Team::Jester
+            })
+        ));
+        assert!(game.is_over());
         for p in 0..8 {
-            assert_eq!(game.won(p), p == jester || wolves.contains(&p), "seat {p}");
+            assert_eq!(game.won(p), p == jester, "seat {p}");
         }
     }
 

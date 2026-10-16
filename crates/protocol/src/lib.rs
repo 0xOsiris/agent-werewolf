@@ -43,6 +43,8 @@ pub enum Team {
     Wolves,
     /// A werewolf and a non-werewolf in love, once they are the last two alive. Only a winner.
     Lovers,
+    /// The Jester, voted out by the village, which ends the game. Only a winner.
+    Jester,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]

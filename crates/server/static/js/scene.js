@@ -1470,7 +1470,7 @@ export class Scene {
     const s = this.game.state;
     const over = s.phase.kind === "over";
     const text = this.banner.text;
-    const winColor = { wolves: "#ff4d5e", lovers: "#ff77a8" }[s.winner] || "#ffd23f";
+    const winColor = { wolves: "#ff4d5e", lovers: "#ff77a8", jester: "#b55088" }[s.winner] || "#ffd23f";
     const color = over ? winColor : s.phase.kind === "night" ? "#c7d2ff" : "#ffffff";
     const img = pixelText(text, color);
     const fit = (want) => Math.max(1, Math.min(want, Math.floor((this.W - 6) / img.width)));

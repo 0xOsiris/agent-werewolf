@@ -660,17 +660,18 @@ function showGameOver(winner, view) {
   const jesterWon = game.state.jesterWon;
   // The Jester never shares a team win: only being voted out, or a Lovers win, counts.
   const won = !role ? null : winner === "lovers" ? partner !== null
-    : role === "jester" ? jesterWon === you() : teamOf(role) === winner && !torn;
+    : role === "jester" ? winner === "jester" : teamOf(role) === winner && !torn;
   const res = $("go-result");
   res.textContent = won === null ? "Game over" : won ? "You won!" : "You lost";
   res.className = "result" + (won === null ? "" : won ? " win" : " lose");
   // The poll's game_over can beat the stream's; then the view says who is still standing.
   const standing = view ? view.players.filter((p) => p.alive).map((p) => p.id) : [];
   const pair = game.lovers(you()) || (winner === "lovers" && standing.length === 2 ? standing : null);
-  let text = { village: "The village wins!", wolves: "The werewolves win!", lovers: "The lovers win!" }[winner] || "Game over";
+  let text = { village: "The village wins!", wolves: "The werewolves win!", lovers: "The lovers win!",
+    jester: "The Jester wins!" }[winner] || "Game over";
   if (winner === "lovers" && pair) text += " " + game.nameOf(pair[0]) + " ♥ " + game.nameOf(pair[1]);
   else if (torn && teamOf(role) === winner && role !== "jester") text += " Your love crossed sides, so your team's win isn't yours.";
-  if (jesterWon !== null) text += " " + (jesterWon === you() ? "You" : game.nameOf(jesterWon)) + " won as the Jester too.";
+  if (winner === "jester" && jesterWon !== null) text += " " + (jesterWon === you() ? "You" : game.nameOf(jesterWon)) + " fooled the village.";
   else if (role === "jester" && !won) text += " The Jester only wins by getting voted out.";
   $("go-winner").textContent = text;
   $("again-hint").textContent = "";

@@ -16,7 +16,7 @@ export const ROLE_GOAL = {
   doctor: "Each night, protect one player from the wolves (not the same player two nights in a row).",
   sheriff: "You have one bullet. Any time during the day's discussion, you may fire it. Hit a wolf and only they die; hit anyone else and you die too. Firing reveals you.",
   cupid: "On the first night, pick two players to fall in love (you may pick yourself). If one lover dies, the other dies of a broken heart.",
-  jester: "Get the village to vote you out. If they do, you win alone and the game goes on without you. Dying any other way wins nothing.",
+  jester: "Get the village to vote you out. If they do, you win alone and the game ends. Dying any other way wins nothing.",
   villager: "Find the werewolves and vote them out before they eat the village.",
 };
 
@@ -63,6 +63,7 @@ export function phaseTitle(phase, winner) {
     if (winner === "village") return "Village wins!";
     if (winner === "wolves") return "Werewolves win!";
     if (winner === "lovers") return "Lovers win!";
+    if (winner === "jester") return "The Jester wins!";
     return "Game over";
   }
   return "Lobby";

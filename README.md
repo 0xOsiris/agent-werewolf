@@ -29,7 +29,7 @@ This starts the server and 9 AIs, then opens the watch page and your join page. 
 - **Roles:** werewolves, seer, doctor, sheriff, Cupid, an optional Jester, and villagers.
 - **Sheriff:** has one bullet for the whole game. Shooting a wolf kills it; shooting anyone else kills the sheriff too.
 - **Cupid:** links two lovers on the first night. If one dies, so does the other. A wolf and a villager in love win only as the last two alive.
-- **Jester:** off unless the host turns it on. Wins alone by getting voted out; the game goes on without them.
+- **Jester:** off unless the host turns it on. Wins alone by getting voted out, which ends the game.
 - **Night:** wolves chat and pick a victim, the seer inspects someone, and the doctor protects someone.
 - **Day:** open discussion with everyone talking at once, and the sheriff may fire at any moment. Then everyone votes.
 - **Graveyard:** during the day's discussion, dead players, human or AI, chat with each other. The living never see it.

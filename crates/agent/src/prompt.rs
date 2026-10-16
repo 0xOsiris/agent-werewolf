@@ -22,7 +22,7 @@ RULES
 - Day: the night's death is announced, everyone talks at once in an open discussion, then everyone votes. The most votes is eliminated; a tie eliminates nobody. Dead players' roles are revealed.
 - Sheriff (some games have one): at any moment during a day's discussion, the sheriff may fire their only bullet of the game. A werewolf hit dies alone; anyone else hit dies and the sheriff dies too. Firing reveals the sheriff.
 - Cupid and Lovers (some games have them): on the first night, Cupid secretly picks two Lovers, possibly including themselves. Each Lover learns the other's identity and role. If one Lover dies, the other dies of heartbreak at once.
-- Jester (some games have one): wins alone if the village votes them out, and the game goes on without them. Dying any other way wins them nothing. The Jester is not a werewolf, and the seer sees them as one.
+- Jester (some games have one): wins alone if the village votes them out, and that ends the game: everyone else loses. Dying any other way wins them nothing. The Jester is not a werewolf, and the seer sees them as not a werewolf.
 - The village wins when every werewolf is dead. The werewolves win when they equal or outnumber everyone else, or if the game reaches day 10. A werewolf and a non-werewolf in love win together, and only together, if they are the last two players alive.";
 
 const WEREWOLF: &str = "\
@@ -60,7 +60,7 @@ You are CUPID, on the village team. You win when every werewolf is dead.
 - After the first night you have no power. Play like a villager and keep your role and your Lovers secret.";
 
 const JESTER: &str = "\
-You are the JESTER. You win, alone, if the village votes you out in a day vote; the game then goes on without you. You never win with the village or the wolves.
+You are the JESTER. You win, alone, if the village votes you out in a day vote; that ends the game and everyone else loses. You never win with the village or the wolves.
 - Be suspicious enough to draw votes: hedge, flip your opinion, defend someone a little too hard, or make a claim that is easy to doubt.
 - Never admit you are the Jester, and don't overdo it: if the village guesses, they will refuse to vote for you.
 - Dying at night or to the sheriff's gun wins you nothing, so don't look like the seer or anyone the wolves want dead.
@@ -291,7 +291,7 @@ fn render_public(out: &mut String, event: &PublicEvent, names: &Names<'_>) {
                 names.get(*player),
                 role_with_article(*role),
                 if jester_won {
-                    " Being voted out is the Jester's win; the game goes on."
+                    " Being voted out is the Jester's win, which ends the game."
                 } else {
                     ""
                 }
@@ -578,6 +578,7 @@ const fn team_label(team: Team) -> &'static str {
         Team::Village => "the village",
         Team::Wolves => "the werewolves",
         Team::Lovers => "the Lovers",
+        Team::Jester => "the Jester",
     }
 }
 
@@ -962,7 +963,7 @@ mod tests {
         ]);
         let prompt = user(&turn(v, TurnKind::DayVote, vec![CAROL]));
         assert!(prompt.contains(
-            "Bob was eliminated by vote. They were the Jester. Being voted out is the Jester's win; the game goes on."
+            "Bob was eliminated by vote. They were the Jester. Being voted out is the Jester's win, which ends the game."
         ));
         assert!(prompt.contains("Dave was killed in the night. They were the Jester.\n"));
     }
