@@ -279,6 +279,8 @@ function buildShared() {
   SPRITES.you = buildSprite([grid(["7y", "1.5y1.", "2.3y2.", "3.y3."], 7, 4)], { y: "#ffd23f" });
   SPRITES.think = buildSprite([grid(["1.9w1.", "11w", "11w", "11w", "1.9w1.", "2.w8.", "1.w9."], 11, 7)],
     { w: "#ffffff" });
+  SPRITES.voted = buildSprite([grid(["1.7g1.", "7gwg", "6gw2g", "gw3gw3g", "2gwgw4g", "3gw5g", "1.7g1."], 9, 7)],
+    { g: "#1f9e6a", w: "#ffffff" });
   SPRITES.cloud = buildSprite([grid(["2.3w1.3w2.", "1.9w1.", "11w", "11w", "1.9w1.", "3.5w3.", "1.2w8.", "w10."], 11, 8)],
     { w: "#ffffff" }, "#4a3a7a");
   SPRITES.shield = buildSprite([grid(["7g", "g2Gw2Gg", "g5wg", "g2Gw2Gg", ".gGwGg.", "2.gwg2.", "3.g3."], 7, 7)],

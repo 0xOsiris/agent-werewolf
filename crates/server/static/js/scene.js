@@ -589,12 +589,11 @@ export class Scene {
       case "phase_started":
         this.banner = { text: this.bannerText(), at: now };
         if (ev.phase.kind === "night") this.fadeArrows("day", 600);
-        for (const a of this.actors.values()) {
-          if (!a.speech && !a.thought) continue;
-          a.speech = null;
-          a.thought = null;
-          this.renderStack(a);
-        }
+        this.clearBubbles();
+        break;
+      case "chat_window":
+        // The vote follows; clearing the discussion's bubbles shows who is still voting.
+        if (!ev.open && ev.kind === "day_speak") this.clearBubbles();
         break;
       case "spoke":
         this.say(ev.player, ev.text, "speech");
@@ -695,6 +694,15 @@ export class Scene {
   /** `now`, or when the big phase banner leaves the middle of the stage if it is still up. */
   afterBanner(now) {
     return Math.max(now, this.banner.at + 1700);
+  }
+
+  clearBubbles() {
+    for (const a of this.actors.values()) {
+      if (!a.speech && !a.thought) continue;
+      a.speech = null;
+      a.thought = null;
+      this.renderStack(a);
+    }
   }
 
   clearTransient() {
@@ -850,14 +858,20 @@ export class Scene {
     setTimeout(() => node.remove(), 5200);
   }
 
-  renderChatBar() {
-    const chat = this.game.state.chat;
-    this.chatBar.hidden = !chat;
-    if (!chat) return;
-    const text = (chat.kind === "wolf_chat" ? "Wolf chat · " : "Open discussion · ")
-      + clock(chat.endsAt - performance.now()) + " left";
+  /** Chat countdown (where enabled), or the day vote's progress on every page. */
+  renderChatBar(vote) {
+    const chat = this.showChat ? this.game.state.chat : null;
+    let text = "";
+    if (chat) {
+      text = (chat.kind === "wolf_chat" ? "Wolf chat · " : "Open discussion · ")
+        + clock(chat.endsAt - performance.now()) + " left";
+    } else if (vote) {
+      text = "Vote · " + vote.done.size + " of " + vote.total + " voted";
+    }
+    this.chatBar.hidden = !text;
+    if (!text) return;
     if (this.chatBar.textContent !== text) this.chatBar.textContent = text;
-    this.chatBar.classList.toggle("wolf", chat.kind === "wolf_chat");
+    this.chatBar.classList.toggle("wolf", !!chat && chat.kind === "wolf_chat");
   }
 
   /** Candidate ids to highlight (null clears), plus the currently selected id. */
@@ -952,13 +966,14 @@ export class Scene {
 
     this.drawLovers(t);
     this.drawVotes(t);
-    for (const a of order) this.drawActorHud(a, t, this.game.player(a.id));
+    const vote = this.game.voteProgress();
+    for (const a of order) this.drawActorHud(a, t, this.game.player(a.id), vote);
     this.drawEffects(t);
     this.drawBanner(t);
     const top = Math.round(this.topAt * this.vp) + "px";
     if (this.top.style.top !== top) this.top.style.top = top;
     this.placeDom(players);
-    if (this.showChat) this.renderChatBar();
+    this.renderChatBar(vote);
   }
 
   drawActor(a, t, p) {
@@ -1054,7 +1069,7 @@ export class Scene {
     }
   }
 
-  drawActorHud(a, t, p) {
+  drawActorHud(a, t, p, vote) {
     if (!p) return;
     const ctx = this.ctx;
     const s = this.game.state;
@@ -1080,6 +1095,8 @@ export class Scene {
       const k = Math.floor(t / 250) % 4;
       ctx.fillStyle = DARK;
       for (let i = 0; i < 3; i++) if (i < k) ctx.fillRect(bx + 3 + i * 3, by + 3, 2, 2);
+    } else if (vote && vote.done.has(a.id)) {
+      ctx.drawImage(SPRITES.voted, x + 3, y - 33);
     }
     const votes = s.phase.kind === "day" ? s.tally[a.id] : 0;
     if (votes) {

@@ -94,6 +94,17 @@ export class Game {
     return p ? p.name : "#" + id;
   }
 
+  /**
+   * The day vote in progress as { done: Set of ids who have voted, total }, or null. Derived from
+   * pending turns, so it survives a reconnect; a timed-out voter counts as done.
+   */
+  voteProgress() {
+    const s = this.state;
+    const living = s.players.filter((p) => p.alive);
+    if (s.phase.kind !== "day" || !living.some((p) => s.pending[p.id]?.kind === "day_vote")) return null;
+    return { done: new Set(living.filter((p) => !s.pending[p.id]).map((p) => p.id)), total: living.length };
+  }
+
   /** The id holding `role`, if this viewer knows it. */
   holder(role) {
     const id = Object.keys(this.state.roles).find((k) => this.state.roles[k] === role);
