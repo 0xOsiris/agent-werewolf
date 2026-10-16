@@ -168,6 +168,129 @@ const COWBOY_HAT = grid({ 0: "4.6k4.", 1: "4.6k4.", 2: "k3.6K3.k", 3: "14k" }, C
 const TIN_STAR = grid({ 13: "5.y8.", 14: "4.3y7.", 15: "5.y8." }, CHAR_W, CHAR_H);
 const KEEPS_UNDER_HAT = new Set(["none", "beard", "glasses", "scarf"]);
 
+// Costumes by lowercase player name; one replaces the random accessory and can swap hair and colours.
+// `clear` hides hair rows above it, `hairStyle` or `hair` replace the hair, `pal` overrides colours.
+// Layers: `hat` ones come off under the sheriff's hat, `over` ones draw after the face.
+// Palette letters k and y belong to the sheriff, so costumes use others.
+const BEARD = { 9: "2.h8.h2.", 10: "2.3h4.3h2.", 11: "2.10h2.", 12: "3.8h3.", 13: "4.6h4.", 14: "5.4h5." };
+const COSTUME_DEFS = {
+  blackbeard: {
+    clear: 4,
+    pal: { h: "#26262e", z: "#1f1f2a", x: "#e8b83a", w: "#f4f4f4", c: "#a22633" },
+    layers: [
+      { hat: true, rows: { 0: "4.6z4.", 1: "1.z2.2z2w2z2.z1.", 2: "1.12z1.", 3: "2.10x2." } },
+      { rows: BEARD },
+      { over: true, rows: { 6: "2.10z2.", 7: "3.3z8.", 8: "3.3z8." } },
+    ],
+  },
+  "chef pierre": {
+    clear: 5,
+    pal: { w: "#f4f4f4", W: "#c0cbdc", z: "#2b2b33", v: "#e43b44", c: "#f0f0f0", C: "#c0cbdc" },
+    layers: [
+      { hat: true, rows: { 0: "3.8w3.", 1: "2.10w2.", 2: "2.10w2.", 3: "3.wWwWwWwW3.", 4: "3.8w3." } },
+      { rows: { 9: "3.8z3.", 12: "5.4v5.", 13: "6.2v6.", 14: "5.z2.z5.", 15: "5.z2.z5." } },
+    ],
+  },
+  "sir galahad": {
+    clear: 10,
+    pal: { u: "#c0cbdc", v: "#e43b44", c: "#9aa1bd", p: "#5a6988" },
+    layers: [
+      { hat: true, rows: { 0: "6.2v6.", 1: "4.6u4.", 2: "3.8u3.", 3: "2.10u2.", 4: "2.10u2.", 5: "2.10U2.",
+        6: "2.u3.2u3.u2.", 7: "2.u3.2u3.u2.", 8: "2.u3.2u3.u2.", 9: "2.u8.u2." } },
+      { rows: { 13: "6.2v6.", 14: "4.6v4.", 15: "6.2v6." } },
+    ],
+  },
+  "unit 7": {
+    clear: 22,
+    pal: { s: "#9aa1bd", r: "#7c84a3", e: "#2ce8f5", m: "#1a1c2c", M: "#2ce8f5", u: "#5a6988",
+      v: "#ff4d5e", x: "#ffd23f", j: "#3ddc97", c: "#5a6988", p: "#3a4466" },
+    layers: [
+      { hat: true, rows: { 0: "6.2v6.", 1: "6.2u6.", 2: "6.2u6." } },
+      { rows: { 5: "2.10u2.", 7: "1.u10.u1.", 8: "1.u10.u1.", 14: "4.v.x.j.v3." } },
+    ],
+  },
+  mulder: {
+    clear: 3,
+    pal: { t: "#d8dee9", T: "#8a93ad", c: "#3a4466" },
+    layers: [{ hat: true, rows: { 0: "6.2t6.", 1: "5.tTtT5.", 2: "4.tTtTtT4.", 3: "3.tTtTtTtT3." } }],
+  },
+  jeeves: {
+    hair: { 2: "3.8h3.", 3: "2.10h2.", 4: "2.3h.6h2.", 5: "2.h8.h2." },
+    pal: { h: "#2b2b33", c: "#262634", w: "#f4f4f4", z: "#1a1c2c" },
+    layers: [{ rows: { 12: "4.w4zw4.", 13: "5.z2wz5.", 14: "6.2w6.", 15: "6.2w6." } }],
+  },
+  howard: {
+    pal: { u: "#c0cbdc", q: "#3a4466", v: "#e43b44" },
+    layers: [
+      { hat: true, rows: { 1: "4.6u4.", 2: "3.u6.u3.", 3: "2.u8.u2.", 4: "2.u8.u2.", 5: "1.2q8.2q1.",
+        6: "1.2q8.2q1.", 7: "1.2q8.2q1." } },
+      { hat: true, over: true, rows: { 8: "11.u2.", 9: "10.u3.", 10: "8.2v4." } },
+    ],
+  },
+  chad: {
+    hairStyle: 3,
+    pal: { z: "#1a1c2c", w: "#f4f4f4", c: "#5b6070" },
+    layers: [
+      { rows: { 12: "2.4c2s4c2.", 13: "5.w2.w5.", 14: "5.w2.w5.", 15: "4.6C4." } },
+      { over: true, rows: { 7: "3.8z3.", 8: "3.3z2.3z3." } },
+    ],
+  },
+  wyatt: {
+    clear: 3,
+    pal: { z: "#2b2b33", u: "#c0cbdc", v: "#d23a3a", q: "#7a4a2a" },
+    layers: [
+      { hat: true, rows: { 0: "4.6z4.", 1: "4.6z4.", 2: "4.6u4.", 3: "1.12z1." } },
+      { rows: { 12: "4.6v4.", 13: "2.2q2.2v2.2q2.", 14: "2.2q6.2q2.", 15: "2.2q6.2q2." } },
+    ],
+  },
+  renko: {
+    clear: 5,
+    pal: { i: "#4a3a30", o: "#c8a878", O: "#9c7c58", x: "#ffd23f", c: "#4a4b59" },
+    layers: [{ hat: true, rows: { 0: "4.6i4.", 1: "3.8i3.", 2: "2.10i2.", 3: "1.oOoOo2xoOoOo1.",
+      4: "1.OoOoOoOoOoOo1.", 5: "1.2o8.2o1.", 6: "1.2O8.2O1.", 7: "1.2o8.2o1.", 8: "1.2O8.2O1.", 9: "1.2o8.2o1." } }],
+  },
+  underwood: {
+    pal: { c: "#262b44", p: "#262b44", w: "#f4f4f4", v: "#a22633", x: "#ffd23f" },
+    layers: [{ rows: { 13: "3.x1.w2vw5.", 14: "6.2v6.", 15: "6.2V6." } }],
+  },
+  sherlock: {
+    clear: 5,
+    pal: { t: "#d8b878", T: "#6a4a2a" },
+    layers: [{ hat: true, rows: { 0: "4.6t4.", 1: "3.tTtTtTtT3.", 2: "2.TtTtTtTtTt2.", 3: "1.tTtTtTtTtTtT1.",
+      4: "2.t8.t2.", 5: "2.T8.T2.", 6: "2.t8.t2." } }],
+  },
+  marlowe: {
+    clear: 3,
+    pal: { z: "#5b6070", c: "#3a3a48" },
+    layers: [{ hat: true, rows: { 0: "4.6z4.", 1: "3.8z3.", 2: "3.8Z3.", 3: "1.12z1." } }],
+  },
+  poirot: {
+    pal: { h: "#2b2b33", z: "#2b2b33" },
+    layers: [{ rows: { 8: "2.z8.z2.", 9: "3.8z3." } }],
+  },
+  wednesday: {
+    hair: { 2: "3.8h3.", 3: "2.10h2.", 4: "2.4h2.4h2.", 5: "2.2h6.2h2.", 6: "1.2h8.2h1.", 7: "1.2h8.2h1.",
+      8: "1.2h8.2h1.", 9: "1.2h8.2h1.", 10: "1.2h8.2h1.", 11: "1.2h8.2h1.", 12: "1.2h8.2h1.", 13: "1.2h8.2h1.",
+      14: "1.2H8.2H1." },
+    pal: { h: "#26262e", H: "#4a4b59", c: "#2b2b33", w: "#f4f4f4" },
+    layers: [{ rows: { 12: "3.3w2.3w3." } }],
+  },
+  watson: {
+    layers: [{ rows: { 9: "4.6h4." } }],
+  },
+  columbo: {
+    hairStyle: 3,
+    pal: { c: "#c2a46e", w: "#f4f4f4", z: "#5a3a28" },
+    layers: [{ rows: { 13: "5.C2wC5.", 14: "4.C.2z.C4.", 15: "6.2z6.", 17: "2.2c6.2c2.", 18: "2.2c6.2c2." } }],
+  },
+};
+const COSTUMES = Object.fromEntries(Object.entries(COSTUME_DEFS).map(([name, c]) => [name, {
+  ...c,
+  hair: c.hair && grid(c.hair, CHAR_W, CHAR_H),
+  layers: c.layers.map((l) => ({ ...l, grid: grid(l.rows, CHAR_W, CHAR_H) })),
+}]));
+const BLANK_ROW = ".".repeat(CHAR_W);
+
 const SKINS = ["#ffd6b0", "#f1c27d", "#d9a066", "#b5774a", "#8d5524", "#ffe2cc"];
 const HAIRS = ["#3b2416", "#6b3e26", "#e8c547", "#b0392b", "#2b2b33", "#d4d4e0", "#7b4fa8"];
 const SHIRTS = [
@@ -209,20 +332,25 @@ const WOLF = {
   20: "3.3f2.3f3.", 21: "3.k.k2.k.k3.",
 };
 
-/** Every frame a player can show, for a player's `look` seed. */
-export function playerSprites(id) {
+/** Every frame a player can show, for a player's `look` seed; a costume name overrides the accessory. */
+export function playerSprites(id, name = "") {
   const v = variantFor(id);
   const acc = v.accessory;
-  let hair = HAIR[v.hairStyle];
-  if (acc.clear) hair = hair.map((row, y) => (y < acc.clear ? ".".repeat(CHAR_W) : row));
+  const costume = COSTUMES[String(name).trim().toLowerCase()];
+  const pieces = costume
+    ? costume.layers
+    : [{ grid: acc.grid, over: acc.over, hat: !KEEPS_UNDER_HAT.has(acc.name) }];
+  const baseHair = costume?.hair ?? HAIR[costume?.hairStyle ?? v.hairStyle];
+  const clear = (costume ? costume.clear : acc.clear) || 0;
+  const hair = baseHair.map((row, y) => (y < clear ? BLANK_ROW : row));
   const pal = {
     s: v.skin, r: shade(v.skin, 0.86), e: "#1a1c2c", m: "#7a3040", M: "#c2405a",
     h: v.hair, c: v.shirt, l: "#5a3a28", L: "#5a3a28", p: v.pants, b: "#3e2731",
     a: v.accColor, A: shade(v.accColor, 0.65), g: "#262b44", G: "#9fd8ef",
+    ...costume?.pal,
   };
-  const under = acc.over ? [] : [acc.grid];
-  const over = acc.over ? [acc.grid] : [];
-  const human = (face) => buildSprite([BODY, hair, ...under, face, ...over], pal);
+  const grids = (list, over) => list.filter((p) => !!p.over === over).map((p) => p.grid);
+  const human = (face) => buildSprite([BODY, hair, ...grids(pieces, false), face, ...grids(pieces, true)], pal);
   const wolfPal = {
     f: v.fur, l: shade(v.fur, 1.45), y: "#ffd23f", Y: "#fff6a0", n: "#1a1c2c", w: "#f4f4f4",
     m: "#6b1020", k: "#e8e8e8", c: v.shirt, p: v.pants,
@@ -230,11 +358,12 @@ export function playerSprites(id) {
   const wolfIdle = grid(WOLF, CHAR_W, CHAR_H);
   const wolfGlow = grid({ ...WOLF, 6: "1.2f2Y4f2Y2f1." }, CHAR_W, CHAR_H);
   const wolfTalk = grid({ ...WOLF, 11: "4.f4mf4." }, CHAR_W, CHAR_H);
-  const capped = HAIR[v.hairStyle].map((row, y) => (y < 3 ? ".".repeat(CHAR_W) : row));
-  const keep = KEEPS_UNDER_HAT.has(acc.name) ? [acc.grid] : [];
+  // The revealed sheriff swaps any hat for the cowboy hat and star, so the role always reads.
+  const capped = baseHair.map((row, y) => (y < 3 ? BLANK_ROW : row));
+  const kept = pieces.filter((p) => !p.hat);
   const sheriffPal = { ...pal, k: "#8f5a3a", K: "#3e2731", y: "#ffd23f" };
-  const sheriff = (face) => buildSprite([BODY, capped, ...(acc.over ? [] : keep), COWBOY_HAT, TIN_STAR, face,
-    ...(acc.over ? keep : [])], sheriffPal);
+  const sheriff = (face) => buildSprite([BODY, capped, ...grids(kept, false), COWBOY_HAT, TIN_STAR, face,
+    ...grids(kept, true)], sheriffPal);
   return {
     idle: human(FACES.idle),
     blink: human(FACES.blink),

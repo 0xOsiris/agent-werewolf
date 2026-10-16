@@ -490,16 +490,18 @@ export class Scene {
       let a = this.actors.get(p.id);
       // Each lobby reshuffles outfits; older servers send no look, so fall back to the seat.
       const look = p.look ?? p.id;
-      if (a && a.look !== look) {
+      if (a && (a.look !== look || a.name !== p.name)) {
         a.look = look;
-        a.sprites = playerSprites(look);
+        a.name = p.name;
+        a.sprites = playerSprites(look, p.name);
       }
       if (!a) {
         const s = this.seat(i, players.length);
         a = {
           id: p.id,
           look,
-          sprites: playerSprites(look),
+          name: p.name,
+          sprites: playerSprites(look, p.name),
           x: s.x, y: s.y, tx: s.x, ty: s.y,
           phase: (p.id * 1.7) % 6.28,
           spawnAt: spawn ? now : -1e9,
